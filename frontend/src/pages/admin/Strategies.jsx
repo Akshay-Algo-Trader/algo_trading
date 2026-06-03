@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react'
+import { useNavigate } from 'react-router-dom'
 import axiosInstance from '../../api/axiosInstance'
 import {
   Card, Table, SkeletonTable, EmptyRow, ErrorRow, Badge,
@@ -69,12 +70,11 @@ function InstrumentSearch({ value, onChange }) {
             <li className="px-3 py-2 text-xs text-gray-400">No instruments found</li>
           )}
           {options.map(opt => {
-            const isIndex = opt.name && (
-              opt.symbol.startsWith('NIFTY') ||
-              opt.symbol === 'SENSEX' ||
-              opt.symbol === 'BANKEX' ||
-              opt.symbol.startsWith('BSE')
-            )
+            const isIndex = opt.symbol.startsWith('NIFTY') || opt.symbol === 'SENSEX' || opt.symbol === 'BANKEX' || opt.symbol.startsWith('BSE')
+            const isMCX   = opt.exchange === 'MCX'
+            const badgeCls = isIndex ? 'bg-purple-100 text-purple-600'
+                           : isMCX   ? 'bg-yellow-100 text-yellow-700'
+                           :            'bg-gray-100 text-gray-500'
             return (
               <li
                 key={`${opt.exchange}:${opt.symbol}`}
@@ -82,7 +82,7 @@ function InstrumentSearch({ value, onChange }) {
                 className="flex items-center gap-2 px-3 py-2 hover:bg-blue-50 cursor-pointer"
               >
                 <span className="font-mono font-semibold text-xs text-gray-800">{opt.symbol}</span>
-                <span className={`text-xs px-1.5 py-0.5 rounded ${isIndex ? 'bg-purple-100 text-purple-600' : 'bg-gray-100 text-gray-500'}`}>
+                <span className={`text-xs px-1.5 py-0.5 rounded ${badgeCls}`}>
                   {isIndex ? 'INDEX' : opt.exchange}
                 </span>
                 <span className="text-xs text-gray-400 truncate">{opt.name}</span>
@@ -96,7 +96,7 @@ function InstrumentSearch({ value, onChange }) {
 }
 
 const CONDITION_TYPES = ['price_above', 'price_below', 'price_cross_up', 'price_cross_down']
-const EXCHANGES = ['NSE', 'BSE']
+const EXCHANGES = ['NSE', 'BSE', 'MCX']
 const ORDER_TYPES = ['MARKET', 'LIMIT']
 
 const EMPTY_FORM = {
@@ -247,137 +247,18 @@ function StrategyModal({ isOpen, onClose, onSaved, strategy }) {
   )
 }
 
-// ─── Assign modal ──────────────────────────────────────────────────────────────
-function AssignModal({ isOpen, onClose, onSaved, strategy }) {
-  const [users, setUsers] = useState([])
-  const [selected, setSelected] = useState(new Set())
-  const [saving, setSaving] = useState(false)
-  const [err, setErr] = useState('')
-  const [search, setSearch] = useState('')
-
-  useEffect(() => {
-    if (!isOpen) return
-    axiosInstance.get('/api/admin/users?role=customer')
-      .then(r => { setUsers(r.data?.users ?? r.data ?? []) })
-      .catch(() => setUsers([]))
-    setSelected(new Set(strategy?.assigned_user_ids ?? []))
-    setSearch('')
-    setErr('')
-  }, [isOpen, strategy])
-
-  function toggle(id) {
-    setSelected(prev => {
-      const next = new Set(prev)
-      next.has(id) ? next.delete(id) : next.add(id)
-      return next
-    })
-  }
-
-  function toggleAll(visible) {
-    const allSelected = visible.every(u => selected.has(u.id))
-    setSelected(prev => {
-      const next = new Set(prev)
-      visible.forEach(u => allSelected ? next.delete(u.id) : next.add(u.id))
-      return next
-    })
-  }
-
-  async function handleAssign() {
-    if (selected.size === 0) { setErr('Select at least one customer'); return }
-    setSaving(true); setErr('')
-    try {
-      await axiosInstance.post(`/api/admin/strategies/${strategy.id}/assign-bulk`, {
-        user_ids: [...selected],
-      })
-      onSaved(); onClose()
-    } catch (ex) {
-      setErr(ex.response?.data?.error ?? 'Assign failed')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const filtered = users.filter(u =>
-    u.email.toLowerCase().includes(search.toLowerCase())
-  )
-  const allChecked = filtered.length > 0 && filtered.every(u => selected.has(u.id))
-
-  return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Assign "${strategy?.name ?? ''}"`}>
-      {err && <p className="text-sm text-red-500 mb-3">{err}</p>}
-
-      {/* Search */}
-      <div className="mb-3">
-        <input
-          value={search}
-          onChange={e => setSearch(e.target.value)}
-          placeholder="Search customers…"
-          className="w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-      </div>
-
-      {/* Select all row */}
-      {filtered.length > 0 && (
-        <label className="flex items-center gap-2.5 px-3 py-2 mb-1 bg-gray-50 rounded-lg cursor-pointer text-xs font-semibold text-gray-500 uppercase tracking-wide">
-          <input
-            type="checkbox"
-            checked={allChecked}
-            onChange={() => toggleAll(filtered)}
-            className="accent-[#eb5202]"
-          />
-          Select all ({filtered.length})
-        </label>
-      )}
-
-      {/* Customer list */}
-      <div className="max-h-56 overflow-y-auto space-y-1 border border-gray-100 rounded-lg p-2">
-        {users.length === 0 ? (
-          <p className="text-sm text-gray-400 text-center py-4">No customers found</p>
-        ) : filtered.length === 0 ? (
-          <p className="text-sm text-gray-400 text-center py-4">No matches for "{search}"</p>
-        ) : filtered.map(u => (
-          <label key={u.id}
-            className={`flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer transition-colors ${
-              selected.has(u.id) ? 'bg-orange-50 border border-orange-200' : 'hover:bg-gray-50 border border-transparent'
-            }`}
-          >
-            <input
-              type="checkbox"
-              checked={selected.has(u.id)}
-              onChange={() => toggle(u.id)}
-              className="accent-[#eb5202]"
-            />
-            <div className="min-w-0">
-              <p className="text-sm font-medium text-gray-800 truncate">{u.email}</p>
-              {u.name && <p className="text-xs text-gray-400 truncate">{u.name}</p>}
-            </div>
-          </label>
-        ))}
-      </div>
-
-      <p className="text-xs text-gray-400 mt-2">{selected.size} customer{selected.size !== 1 ? 's' : ''} selected</p>
-
-      <div className="flex justify-end gap-2 mt-4">
-        <Btn variant="secondary" onClick={onClose}>Cancel</Btn>
-        <Btn variant="primary" onClick={handleAssign} disabled={saving || selected.size === 0}>
-          {saving ? 'Assigning…' : `Assign to ${selected.size || '…'}`}
-        </Btn>
-      </div>
-    </Modal>
-  )
-}
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 const COLS = ['Name', 'Instrument', 'Order Type', 'Entry Condition', 'SL%', 'TP%', 'Status', 'Actions']
 
 export default function Strategies() {
+  const navigate = useNavigate()
   const [strategies, setStrategies] = useState([])
   const [loading, setLoading]       = useState(true)
   const [error, setError]           = useState(null)
   const [addOpen, setAddOpen]       = useState(false)
-  const [editStrategy, setEdit]     = useState(null)
-  const [assignStrategy, setAssign] = useState(null)
   const [toggling, setToggling]     = useState(null)
+  const [deleting, setDeleting]     = useState(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null)
@@ -390,10 +271,20 @@ export default function Strategies() {
 
   useEffect(() => { fetchData() }, [fetchData])
 
+  async function deleteStrategy(s) {
+    if (!window.confirm(`Delete strategy "${s.name}"? This cannot be undone.`)) return
+    setDeleting(s.id)
+    try {
+      await axiosInstance.delete(`/api/admin/strategies/${s.id}`)
+      fetchData()
+    } catch { alert('Delete failed') }
+    finally { setDeleting(null) }
+  }
+
   async function toggleStatus(s) {
     setToggling(s.id)
     try {
-      await axiosInstance.patch(`/api/admin/strategies/${s.id}`, { is_active: !s.is_active })
+      await axiosInstance.put(`/api/admin/strategies/${s.id}`, { is_active: !s.is_active })
       fetchData()
     } catch { alert('Toggle failed') }
     finally { setToggling(null) }
@@ -438,8 +329,10 @@ export default function Strategies() {
                </td>
                <td className="px-4 py-3">
                  <div className="flex items-center gap-2">
-                   <Btn size="sm" variant="ghost" onClick={() => setEdit(s)}>Edit</Btn>
-                   <Btn size="sm" variant="ghost" onClick={() => setAssign(s)}>Assign</Btn>
+                   <Btn size="sm" variant="ghost" onClick={() => navigate(`/admin/strategies/${s.id}/edit`)}>Edit</Btn>
+                   <Btn size="sm" variant="danger" onClick={() => deleteStrategy(s)} disabled={deleting === s.id}>
+                     {deleting === s.id ? '…' : 'Delete'}
+                   </Btn>
                  </div>
                </td>
              </tr>
@@ -448,9 +341,7 @@ export default function Strategies() {
         </Table>
       </Card>
 
-      <StrategyModal isOpen={addOpen}    onClose={() => setAddOpen(false)} onSaved={fetchData} strategy={null} />
-      <StrategyModal isOpen={!!editStrategy} onClose={() => setEdit(null)} onSaved={fetchData} strategy={editStrategy} />
-      <AssignModal   isOpen={!!assignStrategy} onClose={() => setAssign(null)} onSaved={fetchData} strategy={assignStrategy} />
+      <StrategyModal isOpen={addOpen} onClose={() => setAddOpen(false)} onSaved={fetchData} strategy={null} />
     </div>
   )
 }

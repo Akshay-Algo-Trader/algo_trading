@@ -14,6 +14,7 @@ class Exchange(Enum):
     """Exchange enumeration"""
     NSE = 'NSE'
     BSE = 'BSE'
+    MCX = 'MCX'
 
 
 class Strategy(db.Model):

@@ -90,8 +90,8 @@ def list_instruments():
     from sqlalchemy import or_
     q = request.args.get('q', '').strip().upper()
 
-    # Search equities (NSE/BSE/NFO) + index instruments
-    SEARCH_EXCHANGES = ['NSE', 'BSE', 'NFO', 'NSE_INDICES', 'BSE_INDICES']
+    # Search equities, indices, and MCX commodity futures
+    SEARCH_EXCHANGES = ['NSE', 'BSE', 'NFO', 'NSE_INDICES', 'BSE_INDICES', 'MCX']
     base = Instrument.query.filter(Instrument.exchange.in_(SEARCH_EXCHANGES))
     if q:
         base = base.filter(
@@ -108,8 +108,28 @@ def list_instruments():
             for i in instruments
         ]}), 200
 
-    # Instruments table not populated — combine indices + NIFTY50 equities fallback
-    combined = INDICES_FALLBACK + [{**i, 'exchange': 'NSE'} for i in NIFTY50_FALLBACK]
+
+    # Instruments table not populated — combine indices + equities + MCX commodities
+    from datetime import date
+    _MONTH_CODES = ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
+    _MCX_META = [
+        ('GOLD',       'Gold'),       ('GOLDM',      'Gold Mini'),
+        ('GOLDPETAL',  'Gold Petal'), ('SILVER',     'Silver'),
+        ('SILVERM',    'Silver Mini'),('SILVERMIC',  'Silver Micro'),
+        ('CRUDEOIL',   'Crude Oil'),  ('CRUDEOILM',  'Crude Oil Mini'),
+        ('NATURALGAS', 'Natural Gas'),('COPPER',     'Copper'),
+        ('ALUMINIUM',  'Aluminium'),  ('ZINC',       'Zinc'),
+        ('LEAD',       'Lead'),       ('NICKEL',     'Nickel'),
+        ('MENTHAOIL',  'Mentha Oil'),
+    ]
+    today = date.today()
+    mcx_fallback = []
+    for base, name in _MCX_META:
+        m, y = today.month, today.year
+        symbol = f"{base}{str(y)[2:]}{_MONTH_CODES[m - 1]}FUT"
+        mcx_fallback.append({'symbol': symbol, 'name': name, 'exchange': 'MCX'})
+
+    combined = INDICES_FALLBACK + [{**i, 'exchange': 'NSE'} for i in NIFTY50_FALLBACK] + mcx_fallback
     q_lower = q.lower()
     filtered = [
         i for i in combined

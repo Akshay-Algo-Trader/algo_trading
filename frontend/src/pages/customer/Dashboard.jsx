@@ -20,6 +20,7 @@ function StatusBadge({ status }) {
     PENDING: 'bg-yellow-100 text-yellow-700',
     OPEN: 'bg-blue-100 text-blue-700',
     EXECUTED: 'bg-green-100 text-green-700',
+    FILLED: 'bg-green-100 text-green-700',
     CANCELLED: 'bg-gray-100 text-gray-600',
   }
   const s = (status || '').toUpperCase()

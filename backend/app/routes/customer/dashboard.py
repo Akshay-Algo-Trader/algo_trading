@@ -42,10 +42,16 @@ def dashboard():
             portfolio_value = None
             margins = None
 
+    active_session_dict = None
+    if active_session:
+        active_session_dict = active_session.to_dict()
+        if active_session.strategy:
+            active_session_dict['strategy'] = active_session.strategy.to_dict()
+
     return jsonify({
         'user': user.to_dict(),
         'virtual_account': user.virtual_account.to_dict() if user.virtual_account else None,
-        'active_session': active_session.to_dict() if active_session else None,
+        'active_session': active_session_dict,
         'kite': kite_config.to_dict() if kite_config else None,
         'portfolio_value': portfolio_value,
         'margins': margins,

@@ -2,6 +2,13 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import axiosInstance from '../../api/axiosInstance'
 import { useTradingStore } from '../../store/tradingStore'
 
+const INDEX_OPTIONS = [
+  { value: 'NIFTY50',   label: 'NIFTY 50' },
+  { value: 'SENSEX',    label: 'SENSEX' },
+  { value: 'BANKNIFTY', label: 'BANK NIFTY' },
+  { value: 'COMMODITY', label: 'COMMODITY' },
+]
+
 function fmt(n) {
   if (n == null) return '—'
   return new Intl.NumberFormat('en-IN', {
@@ -25,7 +32,7 @@ const MARKET_OPEN_END   = { h: 15, m: 30 }
 
 function isMarketOpen() {
   const now = new Date()
-  const day = now.getDay() // 0=Sun, 6=Sat
+  const day = now.getDay()
   if (day === 0 || day === 6) return false
   const istOffset = 5.5 * 60 * 60 * 1000
   const ist = new Date(now.getTime() + istOffset + now.getTimezoneOffset() * 60 * 1000)
@@ -37,7 +44,7 @@ function isMarketOpen() {
 function OrderModal({ stock, side, mode, onClose, onSuccess }) {
   const [qty, setQty] = useState(1)
   const [orderType, setOrderType] = useState('MARKET')
-  const [tradingType, setTradingType] = useState('intraday') // 'intraday' | 'longterm'
+  const [tradingType, setTradingType] = useState('intraday')
   const [price, setPrice] = useState(stock.ltp ?? '')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -66,7 +73,6 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
       setError('Intraday orders can only be placed during market hours (9:15 AM – 3:30 PM IST).')
       return
     }
-
     setLoading(true)
     try {
       await axiosInstance.post('/api/customer/market/order', {
@@ -76,7 +82,7 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
         order_type: orderType,
         quantity: qty,
         price: orderType === 'MARKET' ? (stock.ltp ?? 0) : fillPrice,
-        product: tradingType === 'intraday' ? 'MIS' : 'CNC',
+        product: tradingType === 'intraday' ? 'MIS' : (stock.exchange === 'MCX' ? 'NRML' : 'CNC'),
         mode,
       })
       onSuccess(`${side} order placed for ${qty} × ${stock.symbol}`)
@@ -91,7 +97,6 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
-        {/* Header */}
         <div className="flex items-center justify-between mb-5">
           <div>
             <div className="flex items-center gap-2">
@@ -119,13 +124,16 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
         )}
 
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Trading type */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-2">Trading Type</label>
             <div className="flex gap-3">
               {[
                 { value: 'intraday', label: 'Intraday', sub: 'MIS · Square off by 3:20 PM' },
-                { value: 'longterm', label: 'Long Term', sub: 'CNC · Delivery to demat' },
+                {
+                  value: 'longterm',
+                  label: 'Long Term',
+                  sub: stock.exchange === 'MCX' ? 'NRML · Carry forward position' : 'CNC · Delivery to demat',
+                },
               ].map(opt => (
                 <label
                   key={opt.value}
@@ -162,7 +170,6 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
             )}
           </div>
 
-          {/* Order type */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1.5">Order Type</label>
             <div className="flex gap-2">
@@ -182,7 +189,6 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
             </div>
           </div>
 
-          {/* Quantity */}
           <div>
             <label className="block text-xs font-medium text-gray-600 mb-1.5">Quantity</label>
             <div className="flex items-center border border-gray-300 rounded-lg overflow-hidden">
@@ -198,7 +204,6 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
             </div>
           </div>
 
-          {/* Price (LIMIT only) */}
           {orderType === 'LIMIT' && (
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1.5">
@@ -214,7 +219,6 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
             </div>
           )}
 
-          {/* Estimated total */}
           <div className="bg-gray-50 rounded-lg px-4 py-3 flex justify-between text-sm">
             <span className="text-gray-500">
               {isBuy ? 'Estimated Cost' : 'Estimated Proceeds'}
@@ -222,20 +226,16 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
             <span className="font-bold text-gray-900">{fmt(estimated)}</span>
           </div>
 
-          {/* Mode badge */}
           <div className={`text-xs text-center py-1.5 rounded-lg font-medium ${
             mode === 'live' ? 'bg-green-50 text-green-700' : 'bg-blue-50 text-blue-700'
           }`}>
             {mode === 'live' ? 'Live Order — real funds' : 'Paper Order — simulated'}
           </div>
 
-          {/* Submit */}
           <button
             type="submit" disabled={loading}
             className={`w-full py-3 rounded-xl text-white font-bold text-sm transition-colors disabled:opacity-50 ${
-              isBuy
-                ? 'bg-green-600 hover:bg-green-700'
-                : 'bg-red-600 hover:bg-red-700'
+              isBuy ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'
             }`}
           >
             {loading ? 'Placing…' : `${side} ${stock.symbol}${isAMO ? ' (AMO)' : ''}`}
@@ -248,12 +248,16 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
 
 export default function Market() {
   const { mode } = useTradingStore()
+  const [selectedIndex, setSelectedIndex] = useState('NIFTY50')
+  const [page, setPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [total, setTotal] = useState(0)
   const [stocks, setStocks] = useState([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
-  const [orderModal, setOrderModal] = useState(null)   // { stock, side }
+  const [orderModal, setOrderModal] = useState(null)
   const [toast, setToast] = useState('')
   const timerRef = useRef(null)
 
@@ -261,8 +265,12 @@ export default function Market() {
     if (!silent) setLoading(true)
     else setRefreshing(true)
     try {
-      const { data } = await axiosInstance.get('/api/customer/market/nifty50')
+      const { data } = await axiosInstance.get('/api/customer/market/stocks', {
+        params: { index: selectedIndex, page },
+      })
       setStocks(data.stocks || [])
+      setTotal(data.total || 0)
+      setTotalPages(data.total_pages || 1)
       setError('')
     } catch {
       setError('Failed to load market data.')
@@ -270,13 +278,19 @@ export default function Market() {
       setLoading(false)
       setRefreshing(false)
     }
-  }, [])
+  }, [selectedIndex, page])
 
   useEffect(() => {
     load()
     timerRef.current = setInterval(() => load(true), 15000)
     return () => clearInterval(timerRef.current)
   }, [load])
+
+  function handleIndexChange(newIndex) {
+    setSelectedIndex(newIndex)
+    setPage(1)
+    setSearch('')
+  }
 
   function showToast(msg) {
     setToast(msg)
@@ -288,10 +302,14 @@ export default function Market() {
     s.name.toLowerCase().includes(search.toLowerCase())
   )
 
+  const indexLabel = INDEX_OPTIONS.find(o => o.value === selectedIndex)?.label || selectedIndex
+  const pageStart = (page - 1) * 50 + 1
+  const pageEnd = Math.min(page * 50, total)
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64 text-gray-400 text-sm">
-        Loading NIFTY 50 stocks…
+        Loading {indexLabel} stocks…
       </div>
     )
   }
@@ -320,13 +338,26 @@ export default function Market() {
 
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">NIFTY 50</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            Live prices · {mode === 'live' ? 'Live trading active' : 'Paper trading mode'}
-            {refreshing && <span className="ml-2 text-blue-500">Refreshing…</span>}
-          </p>
+        <div className="flex items-center gap-3">
+          {/* Index dropdown */}
+          <select
+            value={selectedIndex}
+            onChange={e => handleIndexChange(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm font-semibold text-gray-800 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 cursor-pointer shadow-sm"
+          >
+            {INDEX_OPTIONS.map(opt => (
+              <option key={opt.value} value={opt.value}>{opt.label}</option>
+            ))}
+          </select>
+          <div>
+            <h1 className="text-xl font-bold text-gray-900">{indexLabel}</h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Live prices · {mode === 'live' ? 'Live trading active' : 'Paper trading mode'}
+              {refreshing && <span className="ml-2 text-blue-500">Refreshing…</span>}
+            </p>
+          </div>
         </div>
+
         <div className="flex items-center gap-3">
           <div className="relative">
             <svg className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -375,9 +406,10 @@ export default function Market() {
             <tbody className="divide-y divide-gray-100">
               {filtered.map((stock, idx) => {
                 const pos = stock.change == null ? null : stock.change >= 0
+                const rowNum = pageStart + stocks.indexOf(stock)
                 return (
-                  <tr key={stock.symbol} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-5 py-3.5 text-gray-400 text-xs">{idx + 1}</td>
+                  <tr key={`${stock.exchange}:${stock.symbol}`} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-5 py-3.5 text-gray-400 text-xs">{rowNum}</td>
                     <td className="px-5 py-3.5">
                       <p className="font-medium text-gray-900 leading-tight">{stock.name}</p>
                       <p className="text-xs text-gray-400">{stock.exchange}</p>
@@ -410,7 +442,7 @@ export default function Market() {
                   </tr>
                 )
               })}
-              {filtered.length === 0 && (
+              {filtered.length === 0 && stocks.length > 0 && (
                 <tr>
                   <td colSpan={6} className="px-5 py-12 text-center text-gray-400 text-sm">
                     No stocks match "{search}"
@@ -422,8 +454,36 @@ export default function Market() {
         </div>
       </div>
 
+      {/* Pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between flex-wrap gap-3">
+          <span className="text-xs text-gray-500">
+            Showing {pageStart}–{pageEnd} of {total} instruments
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+              disabled={page === 1}
+              className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              ← Prev
+            </button>
+            <span className="text-sm text-gray-600 font-medium px-2">
+              {page} / {totalPages}
+            </span>
+            <button
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+              disabled={page === totalPages}
+              className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
+      )}
+
       <p className="text-xs text-gray-400 text-center">
-        Prices auto-refresh every 15 seconds · Last traded price from NSE via Kite
+        Prices auto-refresh every 15 seconds · Last traded price via Kite
       </p>
     </div>
   )

@@ -19,6 +19,7 @@ function StatusBadge({ status }) {
   const map = {
     COMPLETE: 'bg-green-100 text-green-700',
     EXECUTED: 'bg-green-100 text-green-700',
+    FILLED: 'bg-green-100 text-green-700',
     REJECTED: 'bg-red-100 text-red-700',
     PENDING: 'bg-yellow-100 text-yellow-700',
     OPEN: 'bg-blue-100 text-blue-700',
@@ -76,7 +77,7 @@ export default function History() {
 
   // Summary stats
   const totalOrders = orders.length
-  const executed = orders.filter(o => ['COMPLETE', 'EXECUTED'].includes((o.status || '').toUpperCase()))
+  const executed = orders.filter(o => ['COMPLETE', 'EXECUTED', 'FILLED'].includes((o.status || '').toUpperCase()))
   const totalPnl = executed.reduce((sum, o) => sum + (o.pnl ?? 0), 0)
 
   // Group by session for P&L summary

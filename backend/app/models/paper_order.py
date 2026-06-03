@@ -52,6 +52,7 @@ class PaperOrder(db.Model):
             'transaction_type': self.transaction_type.value,
             'order_type': self.order_type.value,
             'quantity': self.quantity,
+            'price': self.fill_price,
             'trigger_price': self.trigger_price,
             'fill_price': self.fill_price,
             'fill_time': self.fill_time.isoformat() if self.fill_time else None,
