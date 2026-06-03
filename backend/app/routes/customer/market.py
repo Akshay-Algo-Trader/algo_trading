@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime, timezone, date as _date
+from datetime import datetime, timezone, timedelta, date as _date
 from threading import Lock
 
 from flask import Blueprint, request, jsonify
@@ -25,6 +25,33 @@ _mcx_cache: list | None = None
 _mcx_cache_ts: datetime | None = None
 _mcx_cache_lock = Lock()
 _MCX_CACHE_TTL_SECONDS = 3600
+
+# Per-exchange symbol→token cache used by the candle endpoint when the DB is empty.
+# Maps exchange → {symbol: instrument_token}, refreshed at most once per hour.
+_token_cache: dict[str, dict] = {}
+_token_cache_ts: dict[str, datetime] = {}
+_token_cache_lock = Lock()
+_TOKEN_CACHE_TTL = 3600
+
+
+def _resolve_token(symbol: str, exchange: str, kite) -> int | None:
+    """Return instrument_token for symbol:exchange. DB first, then Kite instruments API."""
+    inst = Instrument.query.filter_by(tradingsymbol=symbol, exchange=exchange).first()
+    if inst and inst.instrument_token:
+        return inst.instrument_token
+
+    now = datetime.now(timezone.utc)
+    with _token_cache_lock:
+        ts = _token_cache_ts.get(exchange)
+        if ts is None or (now - ts).total_seconds() > _TOKEN_CACHE_TTL:
+            try:
+                rows = kite.instruments(exchange)
+                _token_cache[exchange] = {r['tradingsymbol']: r['instrument_token'] for r in rows}
+                _token_cache_ts[exchange] = now
+                logger.info("Token cache refreshed for %s: %d symbols", exchange, len(_token_cache[exchange]))
+            except Exception as exc:
+                logger.warning("Failed to fetch instruments for %s: %s", exchange, exc)
+        return _token_cache.get(exchange, {}).get(symbol)
 
 
 def _get_mcx_instruments(kite_cfg) -> list | None:
@@ -372,6 +399,106 @@ def get_instrument_price():
     }
     _enrich_with_ltp([stock], user_id)
     return jsonify({'symbol': symbol, 'exchange': exchange, 'ltp': stock['ltp']}), 200
+
+
+# duration → (kite interval, lookback in minutes; None = full day session)
+_DURATION_MAP = {
+    '1D':  ('5minute', None),
+    '4H':  ('minute',  240),
+    '3H':  ('minute',  180),
+    '2H':  ('minute',  120),
+    '1H':  ('minute',  60),
+    '30m': ('minute',  30),
+    '5m':  ('minute',  5),
+}
+_IST = timezone(timedelta(hours=5, minutes=30))
+_MARKET_OPEN_MINS  = 9 * 60 + 15   # 09:15 IST in minutes since midnight
+_MARKET_CLOSE_MINS = 15 * 60 + 30  # 15:30 IST
+
+
+def _last_market_close(now_ist: datetime) -> datetime:
+    """Return the most recent market close datetime (15:30 IST of last trading weekday)."""
+    now_mins = now_ist.hour * 60 + now_ist.minute
+    candidate = now_ist.date()
+
+    if now_ist.weekday() >= 5:
+        # Weekend: go back to Friday
+        days_back = now_ist.weekday() - 4
+        candidate = candidate - timedelta(days=days_back)
+    elif now_mins < _MARKET_OPEN_MINS:
+        # Weekday before market opens: use previous trading day
+        candidate -= timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate -= timedelta(days=1)
+    # else: weekday during or after market hours → use today
+
+    return datetime(candidate.year, candidate.month, candidate.day, 15, 30, 0, tzinfo=_IST)
+
+
+def _candle_window(now_ist: datetime, lookback_mins) -> tuple:
+    """Return (from_date, to_date) for the candle request."""
+    now_mins = now_ist.hour * 60 + now_ist.minute
+    market_open = (
+        now_ist.weekday() < 5
+        and _MARKET_OPEN_MINS <= now_mins <= _MARKET_CLOSE_MINS
+    )
+    to_date = now_ist if market_open else _last_market_close(now_ist)
+
+    if lookback_mins is None:
+        from_date = to_date.replace(hour=9, minute=15, second=0, microsecond=0)
+    else:
+        from_date = to_date - timedelta(minutes=lookback_mins)
+
+    return from_date, to_date
+
+
+@customer_market_bp.get('/api/customer/market/candles')
+@customer_required
+def get_candles():
+    user_id  = int(get_jwt_identity())
+    symbol   = request.args.get('symbol', '').strip().upper()
+    exchange = request.args.get('exchange', 'NSE').strip().upper()
+    duration = request.args.get('interval', '1D')  # 1D | 1H | 30m | 5m
+
+    if not symbol:
+        return jsonify({'error': 'symbol required'}), 400
+    if duration not in _DURATION_MAP:
+        return jsonify({'error': f'interval must be one of {list(_DURATION_MAP)}'}), 400
+
+    config = KiteConfig.query.filter_by(user_id=user_id).first()
+    if not (config and config.is_connected and config.access_token_encrypted):
+        return jsonify({'error': 'Kite not connected'}), 400
+
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
+        kite.set_access_token(decrypt(config.access_token_encrypted))
+
+        token = _resolve_token(symbol, exchange, kite)
+        if not token:
+            return jsonify({'error': f'{exchange}:{symbol} not found — try refreshing instruments'}), 404
+
+        kite_interval, lookback_mins = _DURATION_MAP[duration]
+        now_ist = datetime.now(_IST)
+        from_date, to_date = _candle_window(now_ist, lookback_mins)
+
+        raw = kite.historical_data(
+            token,
+            from_date.strftime('%Y-%m-%d %H:%M:%S'),
+            to_date.strftime('%Y-%m-%d %H:%M:%S'),
+            kite_interval,
+        )
+        candles = [{
+            'date': c['date'].strftime('%H:%M'),
+            'open': c['open'], 'high': c['high'],
+            'low': c['low'],   'close': c['close'],
+            'volume': c['volume'],
+        } for c in raw]
+        return jsonify({'symbol': symbol, 'exchange': exchange,
+                        'interval': duration, 'candles': candles}), 200
+    except Exception as exc:
+        logger.warning("Candle fetch failed for %s:%s: %s", exchange, symbol, exc)
+        return jsonify({'error': str(exc)}), 500
 
 
 @customer_market_bp.post('/api/customer/market/order')

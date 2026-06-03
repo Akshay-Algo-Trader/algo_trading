@@ -1,6 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import axiosInstance from '../../api/axiosInstance'
 import { useTradingStore } from '../../store/tradingStore'
+import {
+  ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Cell,
+} from 'recharts'
 
 const INDEX_OPTIONS = [
   { value: 'NIFTY50',   label: 'NIFTY 50' },
@@ -97,6 +101,15 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/50" onClick={onClose} />
       <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 transition-colors"
+          aria-label="Close"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
         <div className="flex items-center justify-between mb-5">
           <div>
             <div className="flex items-center gap-2">
@@ -246,6 +259,183 @@ function OrderModal({ stock, side, mode, onClose, onSuccess }) {
   )
 }
 
+const INTERVALS = [
+  { value: '1D',  label: '1D'  },
+  { value: '4H',  label: '4H'  },
+  { value: '3H',  label: '3H'  },
+  { value: '2H',  label: '2H'  },
+  { value: '1H',  label: '1H'  },
+  { value: '30m', label: '30m' },
+  { value: '5m',  label: '5m'  },
+]
+
+function CandleShape(props) {
+  // recharts passes x/y/width/height based on dataKey="high":
+  //   y         = pixel position of `high` (top of bar)
+  //   y+height  = pixel position of domain yMin (bottom of bar)
+  // So we can compute any price's pixel y as: y + (high - price) * (height / (high - yMin))
+  const { x, y, width, height, payload, yMin } = props
+  if (!payload || !height || height <= 0) return null
+  const { open, close, high, low, isUp } = payload
+  if (high == null || low == null || open == null || close == null) return null
+
+  const color = isUp ? '#16a34a' : '#dc2626'
+  const pxPerUnit = height / (high - yMin)
+  const py = price => y + (high - price) * pxPerUnit
+
+  const yH = py(high)
+  const yL = py(low)
+  const yO = py(open)
+  const yC = py(close)
+  const bodyTop = Math.min(yO, yC)
+  const bodyBot = Math.max(yO, yC)
+  const bodyH   = Math.max(1, bodyBot - bodyTop)
+  const mid     = x + width / 2
+
+  return (
+    <g>
+      <line x1={mid} y1={yH}    x2={mid} y2={bodyTop} stroke={color} strokeWidth={1.5} />
+      <line x1={mid} y1={bodyBot} x2={mid} y2={yL}    stroke={color} strokeWidth={1.5} />
+      <rect x={x + 1} y={bodyTop} width={Math.max(1, width - 2)} height={bodyH} fill={color} rx={1} />
+    </g>
+  )
+}
+
+function ChartModal({ stock, onClose }) {
+  const [candles, setCandles] = useState([])
+  const [interval, setChartInterval] = useState('1D')
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    axiosInstance.get('/api/customer/market/candles', {
+      params: { symbol: stock.symbol, exchange: stock.exchange, interval },
+    }).then(({ data }) => {
+      if (!cancelled) setCandles(data.candles || [])
+    }).catch(err => {
+      if (!cancelled) setError(err.response?.data?.error || 'Failed to load chart data')
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [stock.symbol, stock.exchange, interval])
+
+  const chartData = candles.map(c => ({
+    ...c,
+    bodyLow:  Math.min(c.open, c.close),
+    bodyHigh: Math.max(c.open, c.close),
+    bodySize: Math.abs(c.close - c.open),
+    isUp: c.close >= c.open,
+  }))
+
+  const prices = candles.flatMap(c => [c.high, c.low]).filter(Boolean)
+  const yMin = prices.length ? Math.min(...prices) * 0.999 : 0
+  const yMax = prices.length ? Math.max(...prices) * 1.001 : 100
+
+  function CustomTooltipContent({ active, payload }) {
+    if (!active || !payload?.length) return null
+    const d = payload[0]?.payload
+    if (!d) return null
+    return (
+      <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl space-y-0.5">
+        <p className="font-semibold text-gray-300">{d.date}</p>
+        <p>O <span className="font-bold">{fmt(d.open)}</span></p>
+        <p>H <span className="font-bold text-green-400">{fmt(d.high)}</span></p>
+        <p>L <span className="font-bold text-red-400">{fmt(d.low)}</span></p>
+        <p>C <span className="font-bold">{fmt(d.close)}</span></p>
+        <p className="text-gray-400">Vol {d.volume?.toLocaleString('en-IN')}</p>
+      </div>
+    )
+  }
+
+  const tickCount = Math.min(candles.length, 8)
+  const step = candles.length > tickCount ? Math.floor(candles.length / tickCount) : 1
+  const xTicks = chartData.filter((_, i) => i % step === 0).map(d => d.date)
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-3xl p-6">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-gray-400 hover:text-gray-700 transition-colors"
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+
+        <div className="flex items-start justify-between mb-4 pr-8">
+          <div>
+            <h2 className="text-lg font-bold text-gray-900">{stock.symbol}</h2>
+            <p className="text-xs text-gray-500">{stock.name} · {stock.exchange}</p>
+          </div>
+          <div className="flex gap-1">
+            {INTERVALS.map(iv => (
+              <button
+                key={iv.value}
+                onClick={() => setChartInterval(iv.value)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                  interval === iv.value
+                    ? 'bg-gray-900 text-white'
+                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {iv.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {loading && (
+          <div className="h-72 flex items-center justify-center text-gray-400 text-sm">
+            Loading chart…
+          </div>
+        )}
+        {error && (
+          <div className="h-72 flex items-center justify-center">
+            <p className="text-red-600 text-sm text-center">{error}</p>
+          </div>
+        )}
+        {!loading && !error && candles.length === 0 && (
+          <div className="h-72 flex items-center justify-center text-gray-400 text-sm">
+            No data available
+          </div>
+        )}
+        {!loading && !error && candles.length > 0 && (
+          <ResponsiveContainer width="100%" height={320}>
+            <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+              <XAxis
+                dataKey="date"
+                ticks={xTicks}
+                tickFormatter={v => v}
+                tick={{ fontSize: 10, fill: '#9ca3af' }}
+                axisLine={false} tickLine={false}
+              />
+              <YAxis
+                domain={[yMin, yMax]}
+                tickFormatter={v => `₹${(v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(0))}`}
+                tick={{ fontSize: 10, fill: '#9ca3af' }}
+                axisLine={false} tickLine={false} width={58}
+              />
+              <Tooltip content={<CustomTooltipContent />} cursor={{ stroke: '#e5e7eb', strokeWidth: 1 }} />
+              <Bar dataKey="high" shape={<CandleShape yMin={yMin} />} isAnimationActive={false}>
+                {chartData.map((entry, i) => (
+                  <Cell key={i} fill={entry.isUp ? '#16a34a' : '#dc2626'} />
+                ))}
+              </Bar>
+            </ComposedChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export default function Market() {
   const { mode } = useTradingStore()
   const [selectedIndex, setSelectedIndex] = useState('NIFTY50')
@@ -258,6 +448,7 @@ export default function Market() {
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [orderModal, setOrderModal] = useState(null)
+  const [chartModal, setChartModal] = useState(null)
   const [toast, setToast] = useState('')
   const timerRef = useRef(null)
 
@@ -334,6 +525,10 @@ export default function Market() {
           onClose={() => setOrderModal(null)}
           onSuccess={msg => { setOrderModal(null); showToast(msg) }}
         />
+      )}
+
+      {chartModal && (
+        <ChartModal stock={chartModal} onClose={() => setChartModal(null)} />
       )}
 
       {/* Header */}
@@ -430,12 +625,27 @@ export default function Market() {
                       <ChangeCell change={stock.change} changePct={stock.change_pct} />
                     </td>
                     <td className="px-5 py-3.5">
-                      <div className="flex items-center justify-center">
+                      <div className="flex items-center justify-center gap-2">
                         <button
                           onClick={() => setOrderModal({ stock, side: 'BUY' })}
                           className="px-3.5 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg transition-colors"
                         >
                           BUY
+                        </button>
+                        <button
+                          onClick={() => setOrderModal({ stock, side: 'SELL' })}
+                          className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors"
+                        >
+                          SELL
+                        </button>
+                        <button
+                          onClick={() => setChartModal(stock)}
+                          className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                            <path strokeLinecap="round" strokeLinejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+                          </svg>
+                          Chart
                         </button>
                       </div>
                     </td>
