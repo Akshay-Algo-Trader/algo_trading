@@ -501,6 +501,60 @@ def get_candles():
         return jsonify({'error': str(exc)}), 500
 
 
+@customer_market_bp.get('/api/customer/market/daily-candles')
+@customer_required
+def get_daily_candles():
+    """Return the last N completed + today's developing daily OHLC candles for pattern detection."""
+    user_id  = int(get_jwt_identity())
+    symbol   = request.args.get('symbol', '').strip().upper()
+    exchange = request.args.get('exchange', 'NSE').strip().upper()
+    try:
+        days = min(max(int(request.args.get('days', 10)), 2), 200)
+    except (ValueError, TypeError):
+        days = 10
+
+    if not symbol:
+        return jsonify({'error': 'symbol required'}), 400
+
+    config = KiteConfig.query.filter_by(user_id=user_id).first()
+    if not (config and config.is_connected and config.access_token_encrypted):
+        return jsonify({'error': 'Kite not connected'}), 400
+
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
+        kite.set_access_token(decrypt(config.access_token_encrypted))
+
+        token = _resolve_token(symbol, exchange, kite)
+        if not token:
+            return jsonify({'error': f'{exchange}:{symbol} not found — try refreshing instruments'}), 404
+
+        now_ist = datetime.now(_IST)
+        to_date = now_ist.date()
+        # Request extra days to account for weekends and holidays
+        from_date = to_date - timedelta(days=days + 15)
+
+        raw = kite.historical_data(
+            token,
+            from_date.strftime('%Y-%m-%d'),
+            to_date.strftime('%Y-%m-%d'),
+            'day',
+        )
+        candles = [{
+            'date':   c['date'].strftime('%Y-%m-%d'),
+            'open':   c['open'],
+            'high':   c['high'],
+            'low':    c['low'],
+            'close':  c['close'],
+            'volume': c['volume'],
+        } for c in raw][-days:]
+
+        return jsonify({'symbol': symbol, 'exchange': exchange, 'candles': candles}), 200
+    except Exception as exc:
+        logger.warning("Daily candle fetch failed for %s:%s: %s", exchange, symbol, exc)
+        return jsonify({'error': str(exc)}), 500
+
+
 @customer_market_bp.post('/api/customer/market/order')
 @customer_required
 def place_order():

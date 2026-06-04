@@ -6,6 +6,16 @@ import {
   Modal, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
 
+function usePatterns() {
+  const [patterns, setPatterns] = useState([])
+  useEffect(() => {
+    axiosInstance.get('/api/admin/candle-patterns')
+      .then(r => setPatterns(r.data?.patterns ?? []))
+      .catch(() => {})
+  }, [])
+  return patterns
+}
+
 function InstrumentSearch({ value, onChange }) {
   const [query, setQuery] = useState(value || '')
   const [options, setOptions] = useState([])
@@ -104,6 +114,7 @@ const EMPTY_FORM = {
   order_type: 'MARKET', quantity: '', stop_loss_pct: '', take_profit_pct: '',
   entry_type: 'price_above', entry_value: '',
   exit_type: 'price_below', exit_value: '',
+  candle_pattern_id: '',
 }
 
 // ─── Strategy form modal ───────────────────────────────────────────────────────
@@ -112,22 +123,24 @@ function StrategyModal({ isOpen, onClose, onSaved, strategy }) {
   const [form, setForm] = useState(EMPTY_FORM)
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
+  const patterns = usePatterns()
 
   useEffect(() => {
     if (strategy) {
       setForm({
-        name:            strategy.name ?? '',
-        description:     strategy.description ?? '',
-        instrument:      strategy.instrument ?? '',
-        exchange:        strategy.exchange ?? 'NSE',
-        order_type:      strategy.order_type ?? 'MARKET',
-        quantity:        String(strategy.quantity ?? ''),
-        stop_loss_pct:   String(strategy.stop_loss_pct ?? ''),
-        take_profit_pct: String(strategy.take_profit_pct ?? ''),
-        entry_type:      strategy.entry_condition?.type ?? 'price_above',
-        entry_value:     String(strategy.entry_condition?.value ?? ''),
-        exit_type:       strategy.exit_condition?.type ?? 'price_below',
-        exit_value:      String(strategy.exit_condition?.value ?? ''),
+        name:              strategy.name ?? '',
+        description:       strategy.description ?? '',
+        instrument:        strategy.instrument ?? '',
+        exchange:          strategy.exchange ?? 'NSE',
+        order_type:        strategy.order_type ?? 'MARKET',
+        quantity:          String(strategy.quantity ?? ''),
+        stop_loss_pct:     String(strategy.stop_loss_pct ?? ''),
+        take_profit_pct:   String(strategy.take_profit_pct ?? ''),
+        entry_type:        strategy.entry_condition?.type ?? 'price_above',
+        entry_value:       String(strategy.entry_condition?.value ?? ''),
+        exit_type:         strategy.exit_condition?.type ?? 'price_below',
+        exit_value:        String(strategy.exit_condition?.value ?? ''),
+        candle_pattern_id: strategy.candle_pattern_id ? String(strategy.candle_pattern_id) : '',
       })
     } else {
       setForm(EMPTY_FORM)
@@ -153,8 +166,9 @@ function StrategyModal({ isOpen, onClose, onSaved, strategy }) {
       quantity:        parseInt(form.quantity),
       stop_loss_pct:   parseFloat(form.stop_loss_pct),
       take_profit_pct: parseFloat(form.take_profit_pct),
-      entry_condition: { type: form.entry_type, value: parseFloat(form.entry_value) },
-      exit_condition:  form.exit_value ? { type: form.exit_type, value: parseFloat(form.exit_value) } : null,
+      entry_condition:  { type: form.entry_type, value: parseFloat(form.entry_value) },
+      exit_condition:   form.exit_value ? { type: form.exit_type, value: parseFloat(form.exit_value) } : null,
+      candle_pattern_id: form.candle_pattern_id ? parseInt(form.candle_pattern_id) : null,
     }
     try {
       if (isEdit) {
@@ -206,6 +220,16 @@ function StrategyModal({ isOpen, onClose, onSaved, strategy }) {
           <FormField label="Description">
             <Input value={form.description} onChange={set('description')} placeholder="Optional" />
           </FormField>
+          <FormField label="Candle Pattern">
+            <Select value={form.candle_pattern_id} onChange={set('candle_pattern_id')}>
+              <option value="">— None —</option>
+              {patterns.map(p => (
+                <option key={p.id} value={p.id}>
+                  {p.name} ({p.direction})
+                </option>
+              ))}
+            </Select>
+          </FormField>
           <FormField label="Stop Loss %">
             <Input type="number" step="0.01" min={0} value={form.stop_loss_pct} onChange={set('stop_loss_pct')} required />
           </FormField>
@@ -249,7 +273,7 @@ function StrategyModal({ isOpen, onClose, onSaved, strategy }) {
 
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
-const COLS = ['Name', 'Instrument', 'Order Type', 'Entry Condition', 'SL%', 'TP%', 'Status', 'Actions']
+const COLS = ['Name', 'Instrument', 'Pattern', 'Order Type', 'Entry Condition', 'SL%', 'TP%', 'Status', 'Actions']
 
 export default function Strategies() {
   const navigate = useNavigate()
@@ -299,9 +323,9 @@ export default function Strategies() {
 
       <Card>
         <Table headers={COLS}>
-          {loading ? <SkeletonTable rows={5} cols={8} /> :
-           error   ? <ErrorRow message={error} onRetry={fetchData} cols={8} /> :
-           strategies.length === 0 ? <EmptyRow message="No strategies defined" cols={8} /> :
+          {loading ? <SkeletonTable rows={5} cols={9} /> :
+           error   ? <ErrorRow message={error} onRetry={fetchData} cols={9} /> :
+           strategies.length === 0 ? <EmptyRow message="No strategies defined" cols={9} /> :
            strategies.map(s => (
              <tr key={s.id} className="hover:bg-gray-50">
                <td className="px-4 py-3">
@@ -311,6 +335,13 @@ export default function Strategies() {
                <td className="px-4 py-3 text-sm">
                  <span className="font-medium">{s.instrument}</span>
                  <span className="text-gray-400 ml-1 text-xs">({s.exchange})</span>
+               </td>
+               <td className="px-4 py-3">
+                 {s.candle_pattern ? (
+                   <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${s.candle_pattern.direction === 'bullish' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                     {s.candle_pattern.name}
+                   </span>
+                 ) : <span className="text-xs text-gray-400">—</span>}
                </td>
                <td className="px-4 py-3"><Badge variant="gray">{s.order_type}</Badge></td>
                <td className="px-4 py-3 text-xs text-gray-600">
