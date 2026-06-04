@@ -24,6 +24,7 @@ import CustomerMarket     from './pages/customer/Market'
 import CustomerStrategies from './pages/customer/Strategies'
 import CustomerPortfolio  from './pages/customer/Portfolio'
 import CustomerHistory    from './pages/customer/History'
+import CustomerBacktest   from './pages/customer/Backtest'
 
 function RequireAdminAuth() {
   const token = localStorage.getItem('access_token')
@@ -73,6 +74,7 @@ export default function App() {
           <Route path="/strategies" element={<CustomerStrategies />} />
           <Route path="/portfolio"  element={<CustomerPortfolio />} />
           <Route path="/history"    element={<CustomerHistory />} />
+          <Route path="/backtest"   element={<CustomerBacktest />} />
         </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />

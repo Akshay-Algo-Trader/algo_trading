@@ -12,6 +12,7 @@ from app.routes.customer.orders import customer_orders_bp
 from app.routes.customer.positions import customer_positions_bp
 from app.routes.customer.kite import customer_kite_bp
 from app.routes.customer.market import customer_market_bp
+from app.routes.customer.backtest import customer_backtest_bp
 
 
 def register_routes(app):
@@ -29,3 +30,4 @@ def register_routes(app):
     app.register_blueprint(customer_positions_bp)
     app.register_blueprint(customer_kite_bp)
     app.register_blueprint(customer_market_bp)
+    app.register_blueprint(customer_backtest_bp)

@@ -501,6 +501,80 @@ def get_candles():
         return jsonify({'error': str(exc)}), 500
 
 
+_INDICES_LIST = [
+    # Broad market
+    {'symbol': 'NIFTY 50',          'name': 'Nifty 50',                  'exchange': 'NSE'},
+    {'symbol': 'NIFTY NEXT 50',     'name': 'Nifty Next 50',             'exchange': 'NSE'},
+    {'symbol': 'NIFTY 100',         'name': 'Nifty 100',                 'exchange': 'NSE'},
+    {'symbol': 'NIFTY 200',         'name': 'Nifty 200',                 'exchange': 'NSE'},
+    {'symbol': 'NIFTY 500',         'name': 'Nifty 500',                 'exchange': 'NSE'},
+    {'symbol': 'SENSEX',            'name': 'BSE Sensex',                'exchange': 'BSE'},
+    # Sectoral
+    {'symbol': 'NIFTY BANK',        'name': 'Nifty Bank',                'exchange': 'NSE'},
+    {'symbol': 'NIFTY FIN SERVICE', 'name': 'Nifty Financial Services',  'exchange': 'NSE'},
+    {'symbol': 'NIFTY PSU BANK',    'name': 'Nifty PSU Bank',            'exchange': 'NSE'},
+    {'symbol': 'NIFTY PVT BANK',    'name': 'Nifty Private Bank',        'exchange': 'NSE'},
+    {'symbol': 'NIFTY IT',          'name': 'Nifty IT',                  'exchange': 'NSE'},
+    {'symbol': 'NIFTY AUTO',        'name': 'Nifty Auto',                'exchange': 'NSE'},
+    {'symbol': 'NIFTY PHARMA',      'name': 'Nifty Pharma',              'exchange': 'NSE'},
+    {'symbol': 'NIFTY FMCG',        'name': 'Nifty FMCG',               'exchange': 'NSE'},
+    {'symbol': 'NIFTY METAL',       'name': 'Nifty Metal',               'exchange': 'NSE'},
+    {'symbol': 'NIFTY REALTY',      'name': 'Nifty Realty',              'exchange': 'NSE'},
+    {'symbol': 'NIFTY ENERGY',      'name': 'Nifty Energy',              'exchange': 'NSE'},
+    {'symbol': 'NIFTY INFRA',       'name': 'Nifty Infrastructure',      'exchange': 'NSE'},
+    {'symbol': 'NIFTY MEDIA',       'name': 'Nifty Media',               'exchange': 'NSE'},
+    {'symbol': 'NIFTY HEALTHCARE',  'name': 'Nifty Healthcare',          'exchange': 'NSE'},
+    {'symbol': 'NIFTY CONSR DURBL', 'name': 'Nifty Consumer Durables',   'exchange': 'NSE'},
+    {'symbol': 'NIFTY OIL AND GAS', 'name': 'Nifty Oil & Gas',          'exchange': 'NSE'},
+    # Mid / Small cap
+    {'symbol': 'NIFTY MIDCAP 50',   'name': 'Nifty Midcap 50',          'exchange': 'NSE'},
+    {'symbol': 'NIFTY MIDCAP 100',  'name': 'Nifty Midcap 100',         'exchange': 'NSE'},
+    {'symbol': 'NIFTY SMLCAP 50',   'name': 'Nifty Smallcap 50',        'exchange': 'NSE'},
+    {'symbol': 'NIFTY SMLCAP 100',  'name': 'Nifty Smallcap 100',       'exchange': 'NSE'},
+    # Volatility
+    {'symbol': 'INDIA VIX',         'name': 'India VIX',                 'exchange': 'NSE'},
+]
+
+
+@customer_market_bp.get('/api/customer/market/indices')
+@customer_required
+def get_indices():
+    """Return LTP and change for all major Indian indices via Kite ohlc()."""
+    user_id = int(get_jwt_identity())
+
+    config = KiteConfig.query.filter_by(user_id=user_id).first()
+    if not (config and config.is_connected and config.access_token_encrypted):
+        return jsonify({'error': 'Kite not connected'}), 400
+
+    result = [dict(idx, ltp=None, prev_close=None, change=None, change_pct=None)
+              for idx in _INDICES_LIST]
+
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
+        kite.set_access_token(decrypt(config.access_token_encrypted))
+
+        keys = [f"{idx['exchange']}:{idx['symbol']}" for idx in _INDICES_LIST]
+        ohlc_data = kite.ohlc(keys)
+
+        for row in result:
+            key = f"{row['exchange']}:{row['symbol']}"
+            d   = ohlc_data.get(key, {})
+            ltp        = d.get('last_price')
+            prev_close = (d.get('ohlc') or {}).get('close')
+            if ltp is not None:
+                row['ltp'] = ltp
+            if prev_close is not None:
+                row['prev_close'] = prev_close
+            if ltp is not None and prev_close and prev_close > 0:
+                row['change']     = round(ltp - prev_close, 2)
+                row['change_pct'] = round((ltp - prev_close) / prev_close * 100, 2)
+    except Exception as exc:
+        logger.warning("Indices fetch failed for user %s: %s", user_id, exc)
+
+    return jsonify({'indices': result, 'total': len(result)}), 200
+
+
 @customer_market_bp.get('/api/customer/market/daily-candles')
 @customer_required
 def get_daily_candles():

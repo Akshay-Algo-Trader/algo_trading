@@ -368,6 +368,31 @@ function RulesEditor({ rows, onChange, paramDefs, addLabel }) {
   )
 }
 
+// ─── Current price badge ─────────────────────────────────────────────────────
+function PriceBadge({ ltp, loading }) {
+  if (loading) return <span className="text-xs text-gray-400 ml-1">Fetching price…</span>
+  if (ltp == null) return null
+  return (
+    <span className="text-xs font-semibold text-blue-600 ml-1">
+      LTP: ₹{ltp.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+    </span>
+  )
+}
+
+function PctPriceHint({ ltp, pct, type }) {
+  if (!ltp || !pct || isNaN(parseFloat(pct))) return null
+  const p   = parseFloat(pct)
+  const val = type === 'tp'
+    ? ltp * (1 + p / 100)
+    : ltp * (1 - p / 100)
+  const color = type === 'tp' ? 'text-green-600' : 'text-red-500'
+  return (
+    <p className={`text-xs mt-0.5 ${color}`}>
+      = ₹{val.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} at current price
+    </p>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function StrategyEdit() {
   const { id }   = useParams()
@@ -381,6 +406,9 @@ export default function StrategyEdit() {
   const [saved, setSaved]             = useState(false)
   const [allUsers, setAllUsers]       = useState([])
   const [selectedUsers, setSelectedUsers] = useState(new Set())
+  const [currentPrice, setCurrentPrice]   = useState(null)
+  const [priceLoading, setPriceLoading]   = useState(false)
+  const priceDebounceRef = useRef(null)
 
   const [form, setForm] = useState({
     name: '', description: '', instrument: '', exchange: 'NSE',
@@ -393,6 +421,18 @@ export default function StrategyEdit() {
   const [slRulesRows, setSlRulesRows]         = useState([])
   const [targetRulesRows, setTargetRulesRows] = useState([])
 
+  function fetchPrice(symbol, exchange) {
+    if (!symbol) { setCurrentPrice(null); return }
+    clearTimeout(priceDebounceRef.current)
+    priceDebounceRef.current = setTimeout(() => {
+      setPriceLoading(true)
+      axiosInstance.get(`/api/admin/instruments/price?symbol=${encodeURIComponent(symbol)}&exchange=${encodeURIComponent(exchange)}`)
+        .then(r => setCurrentPrice(r.data?.ltp ?? null))
+        .catch(() => setCurrentPrice(null))
+        .finally(() => setPriceLoading(false))
+    }, 300)
+  }
+
   useEffect(() => {
     Promise.all([
       axiosInstance.get('/api/admin/strategies'),
@@ -400,11 +440,13 @@ export default function StrategyEdit() {
     ]).then(([sr, ur]) => {
       const s = (sr.data?.strategies ?? []).find(x => String(x.id) === String(id))
       if (!s) { navigate('/admin/strategies'); return }
+      const instrument = s.instrument ?? ''
+      const exchange   = s.exchange ?? 'NSE'
       setForm({
         name:            s.name ?? '',
         description:     s.description ?? '',
-        instrument:      s.instrument ?? '',
-        exchange:        s.exchange ?? 'NSE',
+        instrument,
+        exchange,
         order_type:      s.order_type ?? 'MARKET',
         quantity:        String(s.quantity ?? ''),
         stop_loss_pct:   String(s.stop_loss_pct ?? ''),
@@ -420,6 +462,7 @@ export default function StrategyEdit() {
       setTargetRulesRows(rulesObjToRows(s.target_rules, TARGET_PARAM_MAP))
       setAllUsers(ur.data?.users ?? ur.data ?? [])
       setSelectedUsers(new Set(s.assigned_user_ids ?? []))
+      if (instrument) fetchPrice(instrument, exchange)
     }).catch(() => navigate('/admin/strategies'))
       .finally(() => setLoading(false))
   }, [id, navigate])
@@ -514,17 +557,22 @@ export default function StrategyEdit() {
               <Input value={form.name} onChange={set('name')} placeholder="MA Crossover" required />
             </FormField>
 
-            <FormField label="Instrument">
+            <FormField label={<span className="flex items-center gap-1">Instrument <PriceBadge ltp={currentPrice} loading={priceLoading} /></span>}>
               <InstrumentSearch
                 value={form.instrument}
-                onChange={({ symbol, exchange }) =>
+                onChange={({ symbol, exchange }) => {
                   setForm(f => ({ ...f, instrument: symbol, ...(exchange ? { exchange } : {}) }))
-                }
+                  if (symbol && symbol.length > 1) fetchPrice(symbol, exchange || form.exchange)
+                  else setCurrentPrice(null)
+                }}
               />
             </FormField>
 
             <FormField label="Exchange">
-              <Select value={form.exchange} onChange={set('exchange')}>
+              <Select value={form.exchange} onChange={e => {
+                setForm(f => ({ ...f, exchange: e.target.value }))
+                if (form.instrument) fetchPrice(form.instrument, e.target.value)
+              }}>
                 {EXCHANGES.map(e => <option key={e}>{e}</option>)}
               </Select>
             </FormField>
@@ -556,10 +604,12 @@ export default function StrategyEdit() {
 
             <FormField label="Stop Loss %">
               <Input type="number" step="0.01" min={0} value={form.stop_loss_pct} onChange={set('stop_loss_pct')} required />
+              <PctPriceHint ltp={currentPrice} pct={form.stop_loss_pct} type="sl" />
             </FormField>
 
             <FormField label="Take Profit %">
               <Input type="number" step="0.01" min={0} value={form.take_profit_pct} onChange={set('take_profit_pct')} required />
+              <PctPriceHint ltp={currentPrice} pct={form.take_profit_pct} type="tp" />
             </FormField>
           </div>
 

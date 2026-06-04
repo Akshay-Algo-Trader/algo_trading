@@ -138,6 +138,33 @@ def list_instruments():
     return jsonify({'instruments': filtered}), 200
 
 
+@admin_strategies_bp.get('/api/admin/instruments/price')
+@admin_required
+def get_instrument_price_admin():
+    from app.models import KiteConfig
+    from app.services.encryption import decrypt
+    symbol   = request.args.get('symbol', '').strip().upper()
+    exchange = request.args.get('exchange', 'NSE').strip().upper()
+    if not symbol:
+        return jsonify({'error': 'symbol required'}), 400
+
+    # Use any connected customer's Kite credentials to fetch LTP
+    config = KiteConfig.query.filter_by(is_connected=True).first()
+    if not (config and config.access_token_encrypted):
+        return jsonify({'symbol': symbol, 'exchange': exchange, 'ltp': None}), 200
+
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
+        kite.set_access_token(decrypt(config.access_token_encrypted))
+        key  = f"{exchange}:{symbol}"
+        data = kite.ohlc([key])
+        ltp  = data.get(key, {}).get('last_price')
+        return jsonify({'symbol': symbol, 'exchange': exchange, 'ltp': ltp}), 200
+    except Exception as exc:
+        return jsonify({'symbol': symbol, 'exchange': exchange, 'ltp': None}), 200
+
+
 @admin_strategies_bp.get('/api/admin/strategies')
 @admin_required
 def list_strategies():
