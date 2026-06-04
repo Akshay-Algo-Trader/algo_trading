@@ -1,6 +1,7 @@
 from app.routes.auth import auth_bp
 from app.routes.admin.users import admin_users_bp
 from app.routes.admin.strategies import admin_strategies_bp
+from app.routes.admin.candle_patterns import admin_candle_patterns_bp
 from app.routes.admin.kite import admin_kite_bp
 from app.routes.admin.sessions import admin_sessions_bp
 from app.routes.admin.orders import admin_orders_bp
@@ -17,6 +18,7 @@ def register_routes(app):
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_users_bp)
     app.register_blueprint(admin_strategies_bp)
+    app.register_blueprint(admin_candle_patterns_bp)
     app.register_blueprint(admin_kite_bp)
     app.register_blueprint(admin_sessions_bp)
     app.register_blueprint(admin_orders_bp)

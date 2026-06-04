@@ -2,6 +2,165 @@ import { useState, useEffect, useCallback } from 'react'
 import axiosInstance from '../../api/axiosInstance'
 import { useTradingStore } from '../../store/tradingStore'
 import { useStrategyExecutor } from '../../hooks/useStrategyExecutor'
+import {
+  ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Cell,
+} from 'recharts'
+
+// ── Chart helpers ─────────────────────────────────────────────────────────────
+const INTERVALS = [
+  { value: '1D',  label: '1D' },
+  { value: '4H',  label: '4H' },
+  { value: '1H',  label: '1H' },
+  { value: '30m', label: '30m' },
+  { value: '5m',  label: '5m' },
+]
+
+function CandleShape(props) {
+  const { x, y, width, height, payload, yMin } = props
+  if (!payload || !height || height <= 0) return null
+  const { open, close, high, low, isUp } = payload
+  if (high == null || low == null || open == null || close == null) return null
+
+  const color = isUp ? '#16a34a' : '#dc2626'
+  const pxPerUnit = height / (high - yMin)
+  const py = price => y + (high - price) * pxPerUnit
+
+  const yH = py(high), yL = py(low), yO = py(open), yC = py(close)
+  const bodyTop = Math.min(yO, yC)
+  const bodyBot = Math.max(yO, yC)
+  const mid = x + width / 2
+
+  return (
+    <g>
+      <line x1={mid} y1={yH}    x2={mid} y2={bodyTop} stroke={color} strokeWidth={1.5} />
+      <line x1={mid} y1={bodyBot} x2={mid} y2={yL}    stroke={color} strokeWidth={1.5} />
+      <rect x={x + 1} y={bodyTop} width={Math.max(1, width - 2)} height={Math.max(1, bodyBot - bodyTop)} fill={color} rx={1} />
+    </g>
+  )
+}
+
+function InlineChart({ strategy, onClose }) {
+  const [candles, setCandles]     = useState([])
+  const [interval, setInterval_]  = useState('1D')
+  const [loading, setLoading]     = useState(true)
+  const [error, setError]         = useState('')
+
+  useEffect(() => {
+    if (!strategy) return
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    axiosInstance.get('/api/customer/market/candles', {
+      params: { symbol: strategy.instrument, exchange: strategy.exchange, interval },
+    }).then(({ data }) => {
+      if (!cancelled) setCandles(data.candles || [])
+    }).catch(err => {
+      if (!cancelled) setError(err.response?.data?.error || 'Failed to load chart data')
+    }).finally(() => {
+      if (!cancelled) setLoading(false)
+    })
+    return () => { cancelled = true }
+  }, [strategy?.instrument, strategy?.exchange, interval]) // eslint-disable-line
+
+  const chartData = candles.map(c => ({
+    ...c,
+    isUp: c.close >= c.open,
+  }))
+
+  const prices = candles.flatMap(c => [c.high, c.low]).filter(Boolean)
+  const yMin = prices.length ? Math.min(...prices) * 0.999 : 0
+  const yMax = prices.length ? Math.max(...prices) * 1.001 : 100
+
+  const tickCount = Math.min(candles.length, 8)
+  const step = candles.length > tickCount ? Math.floor(candles.length / tickCount) : 1
+  const xTicks = chartData.filter((_, i) => i % step === 0).map(d => d.date)
+
+  function TooltipContent({ active, payload }) {
+    if (!active || !payload?.length) return null
+    const d = payload[0]?.payload
+    if (!d) return null
+    const f = n => n == null ? '—' : new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n)
+    return (
+      <div className="bg-gray-900 text-white text-xs rounded-lg px-3 py-2 shadow-xl space-y-0.5">
+        <p className="font-semibold text-gray-300">{d.date}</p>
+        <p>O <span className="font-bold">{f(d.open)}</span></p>
+        <p>H <span className="font-bold text-green-400">{f(d.high)}</span></p>
+        <p>L <span className="font-bold text-red-400">{f(d.low)}</span></p>
+        <p>C <span className="font-bold">{f(d.close)}</span></p>
+        {d.volume != null && <p className="text-gray-400">Vol {d.volume.toLocaleString('en-IN')}</p>}
+      </div>
+    )
+  }
+
+  if (!strategy) return null
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
+        <div>
+          <h2 className="font-bold text-gray-900">{strategy.instrument}</h2>
+          <p className="text-xs text-gray-500">{strategy.exchange} · {strategy.name}</p>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <div className="flex gap-1">
+            {INTERVALS.map(iv => (
+              <button
+                key={iv.value}
+                onClick={() => setInterval_(iv.value)}
+                className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                  interval === iv.value ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {iv.label}
+              </button>
+            ))}
+          </div>
+          <button onClick={onClose} className="ml-2 text-gray-400 hover:text-gray-700 transition-colors">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      {loading && (
+        <div className="h-64 flex items-center justify-center text-gray-400 text-sm">Loading chart…</div>
+      )}
+      {error && (
+        <div className="h-64 flex items-center justify-center text-red-500 text-sm">{error}</div>
+      )}
+      {!loading && !error && candles.length === 0 && (
+        <div className="h-64 flex items-center justify-center text-gray-400 text-sm">No data available for this interval</div>
+      )}
+      {!loading && !error && candles.length > 0 && (
+        <ResponsiveContainer width="100%" height={280}>
+          <ComposedChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+            <XAxis
+              dataKey="date"
+              ticks={xTicks}
+              tick={{ fontSize: 10, fill: '#9ca3af' }}
+              axisLine={false} tickLine={false}
+            />
+            <YAxis
+              domain={[yMin, yMax]}
+              tickFormatter={v => `₹${v >= 1000 ? (v / 1000).toFixed(1) + 'k' : v.toFixed(0)}`}
+              tick={{ fontSize: 10, fill: '#9ca3af' }}
+              axisLine={false} tickLine={false} width={58}
+            />
+            <Tooltip content={<TooltipContent />} cursor={{ stroke: '#e5e7eb', strokeWidth: 1 }} />
+            <Bar dataKey="high" shape={<CandleShape yMin={yMin} />} isAnimationActive={false}>
+              {chartData.map((_, i) => (
+                <Cell key={i} fill={chartData[i].isUp ? '#16a34a' : '#dc2626'} />
+              ))}
+            </Bar>
+          </ComposedChart>
+        </ResponsiveContainer>
+      )}
+    </div>
+  )
+}
 
 // ── Phase badge ────────────────────────────────────────────────────────────────
 const PHASE_STYLE = {
@@ -111,7 +270,7 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, onStop }) {
 }
 
 // ── Strategy card ─────────────────────────────────────────────────────────────
-function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode, kiteConnected }) {
+function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode, kiteConnected, onChart, chartActive }) {
   const isActivating = activating === strategy.id
   const hasSession = !!activeSessionId
   const liveBlocked = mode === 'live' && !kiteConnected
@@ -155,6 +314,22 @@ function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode,
         </div>
       </div>
 
+      {strategy.candle_pattern && (
+        <div className={`rounded-lg px-3 py-2 flex items-center gap-2 ${strategy.candle_pattern.direction === 'bullish' ? 'bg-green-50 border border-green-100' : 'bg-red-50 border border-red-100'}`}>
+          <svg className={`w-3.5 h-3.5 flex-shrink-0 ${strategy.candle_pattern.direction === 'bullish' ? 'text-green-600' : 'text-red-600'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+          </svg>
+          <div className="min-w-0">
+            <p className={`text-xs font-semibold ${strategy.candle_pattern.direction === 'bullish' ? 'text-green-700' : 'text-red-700'}`}>
+              {strategy.candle_pattern.name}
+            </p>
+            {strategy.candle_pattern.market && (
+              <p className="text-xs text-gray-500">{strategy.candle_pattern.market}</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {strategy.entry_condition && (
         <div>
           <p className="text-xs text-gray-400 font-medium mb-1">Entry Condition</p>
@@ -164,25 +339,41 @@ function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode,
         </div>
       )}
 
-      <button
-        onClick={() => onActivate(strategy.id)}
-        disabled={hasSession || isActivating || !strategy.is_active || liveBlocked}
-        className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-colors ${
-          hasSession || !strategy.is_active || liveBlocked
-            ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-            : 'bg-blue-600 hover:bg-blue-700 text-white'
-        }`}
-        title={
-          liveBlocked  ? 'Kite not connected — contact admin'
-          : hasSession ? 'Stop the current active session first'
-          : undefined
-        }
-      >
-        {isActivating ? 'Activating…'
-          : hasSession ? 'Session Already Active'
-          : liveBlocked ? 'Kite Not Connected'
-          : 'Activate Strategy'}
-      </button>
+      <div className="flex gap-2">
+        <button
+          onClick={() => onChart(strategy)}
+          className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${
+            chartActive
+              ? 'bg-gray-900 text-white border-gray-900'
+              : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+          }`}
+          title="View candle chart"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
+          </svg>
+          Chart
+        </button>
+        <button
+          onClick={() => onActivate(strategy.id)}
+          disabled={hasSession || isActivating || !strategy.is_active || liveBlocked}
+          className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
+            hasSession || !strategy.is_active || liveBlocked
+              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+              : 'bg-blue-600 hover:bg-blue-700 text-white'
+          }`}
+          title={
+            liveBlocked  ? 'Kite not connected — contact admin'
+            : hasSession ? 'Stop the current active session first'
+            : undefined
+          }
+        >
+          {isActivating ? 'Activating…'
+            : hasSession ? 'Session Already Active'
+            : liveBlocked ? 'Kite Not Connected'
+            : 'Activate Strategy'}
+        </button>
+      </div>
     </div>
   )
 }
@@ -199,6 +390,11 @@ export default function Strategies() {
   const [stopping, setStopping]           = useState(false)
   const [error, setError]                 = useState('')
   const [success, setSuccess]             = useState('')
+  const [chartStrategy, setChartStrategy] = useState(null)
+
+  function handleChart(strategy) {
+    setChartStrategy(prev => prev?.id === strategy.id ? null : strategy)
+  }
 
   async function loadData() {
     try {
@@ -386,19 +582,30 @@ export default function Strategies() {
           No strategies have been assigned to your account yet. Contact your admin.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-          {strategies.map(s => (
-            <StrategyCard
-              key={s.id}
-              strategy={s}
-              activeSessionId={activeSession?.id}
-              onActivate={handleActivate}
-              activating={activating}
-              mode={mode}
-              kiteConnected={kiteConnected}
+        <>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+            {strategies.map(s => (
+              <StrategyCard
+                key={s.id}
+                strategy={s}
+                activeSessionId={activeSession?.id}
+                onActivate={handleActivate}
+                activating={activating}
+                mode={mode}
+                kiteConnected={kiteConnected}
+                onChart={handleChart}
+                chartActive={chartStrategy?.id === s.id}
+              />
+            ))}
+          </div>
+
+          {chartStrategy && (
+            <InlineChart
+              strategy={chartStrategy}
+              onClose={() => setChartStrategy(null)}
             />
-          ))}
-        </div>
+          )}
+        </>
       )}
     </div>
   )

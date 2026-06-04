@@ -172,6 +172,7 @@ def create_strategy():
         exit_condition=data['exit_condition'],
         stop_loss_pct=float(data['stop_loss_pct']),
         take_profit_pct=float(data['take_profit_pct']),
+        candle_pattern_id=data.get('candle_pattern_id'),
         created_by=int(get_jwt_identity())
     )
     db.session.add(strategy)
@@ -187,7 +188,7 @@ def update_strategy(strategy_id):
 
     scalar_fields = ['name', 'description', 'instrument', 'quantity',
                      'entry_condition', 'exit_condition', 'stop_loss_pct',
-                     'take_profit_pct', 'is_active']
+                     'take_profit_pct', 'candle_pattern_id', 'is_active']
     for field in scalar_fields:
         if field in data:
             setattr(strategy, field, data[field])

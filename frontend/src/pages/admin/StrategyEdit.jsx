@@ -5,6 +5,16 @@ import {
   Card, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
 
+function usePatterns() {
+  const [patterns, setPatterns] = useState([])
+  useEffect(() => {
+    axiosInstance.get('/api/admin/candle-patterns')
+      .then(r => setPatterns(r.data?.patterns ?? []))
+      .catch(() => {})
+  }, [])
+  return patterns
+}
+
 // ─── Instrument search ────────────────────────────────────────────────────────
 function InstrumentSearch({ value, onChange }) {
   const [query, setQuery]     = useState(value || '')
@@ -199,6 +209,7 @@ export default function StrategyEdit() {
   const { id }   = useParams()
   const navigate = useNavigate()
   const formRef  = useRef(null)
+  const patterns = usePatterns()
 
   const [loading, setLoading]         = useState(true)
   const [saving, setSaving]           = useState(false)
@@ -212,6 +223,7 @@ export default function StrategyEdit() {
     order_type: 'MARKET', quantity: '', stop_loss_pct: '', take_profit_pct: '',
     entry_type: 'price_above', entry_value: '',
     exit_type: 'price_below', exit_value: '',
+    candle_pattern_id: '',
     is_active: true,
   })
 
@@ -231,11 +243,12 @@ export default function StrategyEdit() {
         quantity:        String(s.quantity ?? ''),
         stop_loss_pct:   String(s.stop_loss_pct ?? ''),
         take_profit_pct: String(s.take_profit_pct ?? ''),
-        entry_type:      s.entry_condition?.type ?? 'price_above',
-        entry_value:     String(s.entry_condition?.value ?? ''),
-        exit_type:       s.exit_condition?.type ?? 'price_below',
-        exit_value:      String(s.exit_condition?.value ?? ''),
-        is_active:       s.is_active ?? true,
+        entry_type:        s.entry_condition?.type ?? 'price_above',
+        entry_value:       String(s.entry_condition?.value ?? ''),
+        exit_type:         s.exit_condition?.type ?? 'price_below',
+        exit_value:        String(s.exit_condition?.value ?? ''),
+        candle_pattern_id: s.candle_pattern_id ? String(s.candle_pattern_id) : '',
+        is_active:         s.is_active ?? true,
       })
       setAllUsers(ur.data?.users ?? ur.data ?? [])
       setSelectedUsers(new Set(s.assigned_user_ids ?? []))
@@ -262,9 +275,10 @@ export default function StrategyEdit() {
         quantity:        parseInt(form.quantity),
         stop_loss_pct:   parseFloat(form.stop_loss_pct),
         take_profit_pct: parseFloat(form.take_profit_pct),
-        entry_condition: { type: form.entry_type, value: parseFloat(form.entry_value) },
-        exit_condition:  form.exit_value ? { type: form.exit_type, value: parseFloat(form.exit_value) } : null,
-        is_active:       form.is_active,
+        entry_condition:   { type: form.entry_type, value: parseFloat(form.entry_value) },
+        exit_condition:    form.exit_value ? { type: form.exit_type, value: parseFloat(form.exit_value) } : null,
+        candle_pattern_id: form.candle_pattern_id ? parseInt(form.candle_pattern_id) : null,
+        is_active:         form.is_active,
       })
       await axiosInstance.post(`/api/admin/strategies/${id}/assign-bulk`, {
         user_ids: [...selectedUsers],
@@ -357,6 +371,17 @@ export default function StrategyEdit() {
 
             <FormField label="Description">
               <Input value={form.description} onChange={set('description')} placeholder="Optional" />
+            </FormField>
+
+            <FormField label="Candle Pattern">
+              <Select value={form.candle_pattern_id} onChange={set('candle_pattern_id')}>
+                <option value="">— None —</option>
+                {patterns.map(p => (
+                  <option key={p.id} value={p.id}>
+                    {p.name} ({p.direction})
+                  </option>
+                ))}
+              </Select>
             </FormField>
 
             <FormField label="Stop Loss %">

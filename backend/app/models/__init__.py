@@ -2,6 +2,7 @@
 
 from app.models.user import User, UserRole
 from app.models.kite_config import KiteConfig
+from app.models.candle_pattern import CandlePattern
 from app.models.strategy import Strategy, OrderType, Exchange
 from app.models.user_strategy import UserStrategy
 from app.models.trading_session import TradingSession, SessionMode, SessionStatus
@@ -16,6 +17,7 @@ __all__ = [
     'User',
     'UserRole',
     'KiteConfig',
+    'CandlePattern',
     'Strategy',
     'OrderType',
     'Exchange',
