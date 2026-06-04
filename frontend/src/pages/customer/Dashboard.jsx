@@ -13,6 +13,30 @@ function fmtDate(s) {
   return new Date(s).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })
 }
 
+function groupIntoTrades(orders) {
+  const map = {}
+  for (const o of orders) {
+    const key = o.session_id != null ? `s_${o.session_id}` : `o_${o.id}`
+    if (!map[key]) {
+      map[key] = { key, session_id: o.session_id, strategy_name: o.strategy_name, symbol: o.symbol, quantity: o.quantity, entry: null, exit: null, entryPrice: null, exitPrice: null, status: null }
+    }
+    const t = (o.transaction_type || '').toUpperCase()
+    if (t === 'BUY') {
+      map[key].entry = o.created_at || o.placed_at
+      map[key].entryPrice = o.fill_price ?? o.price
+      map[key].symbol = o.symbol
+      map[key].quantity = o.quantity
+      map[key].strategy_name = map[key].strategy_name || o.strategy_name
+      map[key].status = o.status
+    } else if (t === 'SELL') {
+      map[key].exit = o.created_at || o.placed_at
+      map[key].exitPrice = o.fill_price ?? o.price
+      map[key].status = o.status
+    }
+  }
+  return Object.values(map).sort((a, b) => (b.entry || b.exit || '') > (a.entry || a.exit || '') ? 1 : -1)
+}
+
 function StatusBadge({ status }) {
   const map = {
     COMPLETE: 'bg-green-100 text-green-700',
@@ -87,7 +111,7 @@ export default function Dashboard() {
       setKiteConnected(dashRes.data?.kite?.is_connected === true)
       const raw = ordersRes.data.orders
       const list = mode === 'live' ? (raw.live || []) : (raw.paper || [])
-      setOrders(list.slice(0, 5))
+      setOrders(groupIntoTrades(list).slice(0, 5))
     } catch {
       setError('Failed to load dashboard data.')
     } finally {
@@ -279,24 +303,30 @@ export default function Dashboard() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 text-left">
-                  {['Symbol', 'Type', 'Qty', 'Price', 'Status', 'Time'].map(h => (
-                    <th key={h} className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">{h}</th>
+                  {['Symbol', 'Qty', 'Strategy', 'Entry Time', 'Exit Time', 'Status'].map(h => (
+                    <th key={h} className="px-5 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {orders.map((o, i) => (
-                  <tr key={o.id ?? i} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-5 py-3 font-medium text-gray-900">{o.symbol || o.tradingsymbol || '—'}</td>
-                    <td className="px-5 py-3">
-                      <span className={`text-xs font-semibold ${(o.transaction_type || '').toUpperCase() === 'BUY' ? 'text-green-600' : 'text-red-600'}`}>
-                        {o.transaction_type || o.order_type || '—'}
-                      </span>
+                {orders.map((trade) => (
+                  <tr key={trade.key} className="hover:bg-gray-50 transition-colors">
+                    <td className="px-5 py-3 font-medium text-gray-900">{trade.symbol || '—'}</td>
+                    <td className="px-5 py-3 text-gray-700">{trade.quantity ?? '—'}</td>
+                    <td className="px-5 py-3 text-gray-600 text-xs">{trade.strategy_name || '—'}</td>
+                    <td className="px-5 py-3 text-gray-400 text-xs whitespace-nowrap">
+                      {trade.entry ? (
+                        <span className="text-green-700 font-medium">{fmtDate(trade.entry)}</span>
+                      ) : '—'}
                     </td>
-                    <td className="px-5 py-3 text-gray-700">{o.quantity ?? '—'}</td>
-                    <td className="px-5 py-3 text-gray-700">{o.price != null ? fmt(o.price) : '—'}</td>
-                    <td className="px-5 py-3"><StatusBadge status={o.status} /></td>
-                    <td className="px-5 py-3 text-gray-400 text-xs whitespace-nowrap">{fmtDate(o.created_at || o.placed_at)}</td>
+                    <td className="px-5 py-3 text-gray-400 text-xs whitespace-nowrap">
+                      {trade.exit ? (
+                        <span className="text-red-600 font-medium">{fmtDate(trade.exit)}</span>
+                      ) : (
+                        <span className="text-gray-300">Pending</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-3"><StatusBadge status={trade.status} /></td>
                   </tr>
                 ))}
               </tbody>

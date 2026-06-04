@@ -220,10 +220,25 @@ export default function Strategies() {
 
   useEffect(() => { loadData() }, []) // eslint-disable-line
 
-  const handleSessionStop = useCallback(() => {
+  const handleSessionStop = useCallback((result) => {
     setActiveSession(null)
     setActiveStrategy(null)
-    setSuccess('')
+    if (result?.reason === 'executed') {
+      const pnl = result.entryPrice != null && result.exitPrice != null
+        ? ((result.exitPrice - result.entryPrice) / result.entryPrice * 100).toFixed(2)
+        : null
+      setSuccess({
+        type: 'executed',
+        strategyName: result.strategyName,
+        instrument: result.instrument,
+        quantity: result.quantity,
+        entryPrice: result.entryPrice,
+        exitPrice: result.exitPrice,
+        pnl,
+      })
+    } else {
+      setSuccess('')
+    }
     loadData()
   }, []) // eslint-disable-line
 
@@ -244,7 +259,7 @@ export default function Strategies() {
     setSuccess('')
     try {
       await axiosInstance.post('/api/customer/session/start', { strategy_id: strategyId, mode })
-      setSuccess(`Strategy activated in ${mode} mode — executor is now monitoring live prices.`)
+      setSuccess({ type: 'activated', mode })
       const dashRes = await axiosInstance.get('/api/customer/dashboard')
       const sess = dashRes.data.active_session || null
       setActiveSession(sess)
@@ -298,12 +313,37 @@ export default function Strategies() {
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
       )}
       {success && (
-        <div className="bg-green-50 border border-green-200 text-green-700 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
-          <svg className="w-4 h-4 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-          </svg>
-          {success}
-        </div>
+        success.type === 'executed' ? (
+          <div className="bg-green-50 border border-green-200 rounded-xl px-5 py-4 flex items-start gap-3">
+            <div className="w-8 h-8 rounded-full bg-green-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+              <svg className="w-4 h-4 text-green-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-green-800">Trade Completed — {success.strategyName}</p>
+              <p className="text-sm text-green-700 mt-1">
+                {success.quantity}× {success.instrument} &nbsp;·&nbsp;
+                Entry ₹{success.entryPrice?.toFixed(2)} &nbsp;→&nbsp; Exit ₹{success.exitPrice?.toFixed(2)}
+                {success.pnl != null && (
+                  <span className={`ml-2 font-semibold ${parseFloat(success.pnl) >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                    ({parseFloat(success.pnl) >= 0 ? '+' : ''}{success.pnl}%)
+                  </span>
+                )}
+              </p>
+              <p className="text-xs text-green-600 mt-1">Position closed. Check History for the full trade record.</p>
+            </div>
+            <button onClick={() => setSuccess('')} className="text-green-400 hover:text-green-600 flex-shrink-0">✕</button>
+          </div>
+        ) : success.type === 'activated' ? (
+          <div className="bg-blue-50 border border-blue-200 text-blue-800 px-4 py-3 rounded-lg text-sm flex items-center gap-2">
+            <svg className="w-4 h-4 flex-shrink-0 text-blue-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+            Strategy activated in <span className="font-semibold mx-1">{success.mode}</span> mode — executor is monitoring live prices.
+            <button onClick={() => setSuccess('')} className="ml-auto text-blue-400 hover:text-blue-600">✕</button>
+          </div>
+        ) : null
       )}
 
       {mode === 'live' && !kiteConnected && (

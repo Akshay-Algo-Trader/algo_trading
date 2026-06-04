@@ -12,16 +12,24 @@ def my_orders():
     user_id = int(get_jwt_identity())
     mode = request.args.get('mode', '').lower()
 
+    def with_strategy(order):
+        d = order.to_dict()
+        try:
+            d['strategy_name'] = order.session.strategy.name if order.session and order.session.strategy else None
+        except Exception:
+            d['strategy_name'] = None
+        return d
+
     result = {}
     if mode in ('', 'live'):
         live = LiveOrder.query.filter_by(user_id=user_id).order_by(
             LiveOrder.placed_at.desc()
         ).all()
-        result['live'] = [o.to_dict() for o in live]
+        result['live'] = [with_strategy(o) for o in live]
     if mode in ('', 'paper'):
         paper = PaperOrder.query.filter_by(user_id=user_id).order_by(
             PaperOrder.created_at.desc()
         ).all()
-        result['paper'] = [o.to_dict() for o in paper]
+        result['paper'] = [with_strategy(o) for o in paper]
 
     return jsonify({'orders': result}), 200

@@ -154,7 +154,14 @@ export function useStrategyExecutor({ session, strategy, mode, onSessionStop }) 
               addLog(`SELL ${strategy.quantity}×${strategy.instrument} @ ₹${currentLtp}`, 'success')
               patchPhase('exited')
               try { await axiosInstance.post('/api/customer/session/stop') } catch {}
-              onStopRef.current?.()
+              onStopRef.current?.({
+                reason: 'executed',
+                strategyName: strategy.name,
+                instrument: strategy.instrument,
+                quantity: strategy.quantity,
+                entryPrice: ep,
+                exitPrice: currentLtp,
+              })
             }
           } catch (err) {
             if (!cancelled) {

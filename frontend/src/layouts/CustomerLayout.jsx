@@ -155,21 +155,17 @@ export default function CustomerLayout() {
                 <span className={`w-1.5 h-1.5 rounded-full ${!isLive ? 'bg-blue-200' : 'bg-gray-400'}`} />
                 Paper
               </button>
-              <button
-                onClick={() => handleModeClick('live')}
-                disabled={!kiteConnected}
-                title={!kiteConnected ? 'Kite not connected — contact admin' : undefined}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                  isLive
-                    ? 'bg-green-600 text-white shadow-sm'
-                    : kiteConnected
-                      ? 'text-gray-500 hover:text-gray-700'
-                      : 'text-gray-300 cursor-not-allowed'
-                }`}
-              >
-                <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-green-200' : 'bg-gray-400'}`} />
-                Live
-              </button>
+              {kiteConnected && (
+                <button
+                  onClick={() => handleModeClick('live')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                    isLive ? 'bg-green-600 text-white shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${isLive ? 'bg-green-200' : 'bg-gray-400'}`} />
+                  Live
+                </button>
+              )}
             </div>
 
             <div className="flex items-center gap-2">
