@@ -44,19 +44,19 @@ export default function Dashboard() {
     setLoading(true)
     setError(null)
     try {
-      const [uRes, sRes, lRes, pRes, logRes] = await Promise.all([
+      const [uRes, sRes, lRes, pRes, sellRes] = await Promise.all([
         axiosInstance.get('/api/admin/users'),
         axiosInstance.get('/api/admin/sessions'),
         axiosInstance.get('/api/admin/orders/live'),
         axiosInstance.get('/api/admin/orders/paper'),
-        axiosInstance.get('/api/admin/logs'),
+        axiosInstance.get('/api/admin/logs?event_type=PAPER_SELL&per_page=200'),
       ])
 
       const users    = uRes.data?.users    ?? uRes.data   ?? []
       const sessions = sRes.data?.sessions ?? sRes.data   ?? []
       const live     = lRes.data?.orders   ?? lRes.data   ?? []
       const paper    = pRes.data?.orders   ?? pRes.data   ?? []
-      const logs     = logRes.data?.logs   ?? logRes.data ?? []
+      const sellLogs = sellRes.data?.logs  ?? sellRes.data ?? []
 
       const today = new Date().toDateString()
       const liveToday  = live.filter(o  => new Date(o.placed_at  ?? o.created_at).toDateString() === today).length
@@ -73,11 +73,11 @@ export default function Dashboard() {
       setPaper([...paper].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)).slice(0, 10))
 
       // P&L line chart from PAPER_SELL audit logs
-      const sellLogs = logs
-        .filter(l => l.event_type === 'PAPER_SELL' && l.payload?.realised_pnl != null)
+      const sorted = [...sellLogs]
+        .filter(l => l.payload?.realised_pnl != null)
         .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
       let cumPnl = 0
-      const pnl = sellLogs.map(l => {
+      const pnl = sorted.map(l => {
         cumPnl += l.payload.realised_pnl
         return { date: new Date(l.created_at).toLocaleDateString('en-IN'), pnl: +cumPnl.toFixed(2) }
       })

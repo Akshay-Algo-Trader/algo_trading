@@ -365,7 +365,7 @@ function tpHit(pattern, entryPrice, ltp, tpPct) {
 }
 
 // phase: 'idle' | 'monitoring' | 'entering' | 'in_position' | 'exiting' | 'exited'
-export function useStrategyExecutor({ session, strategy, mode, onSessionStop }) {
+export function useStrategyExecutor({ session, strategy, mode, onSessionStop, onError }) {
   const [phase, setPhase]                   = useState('idle')
   const [ltp, setLtp]                       = useState(null)
   const [entryPrice, setEntryPrice]         = useState(null)
@@ -376,14 +376,17 @@ export function useStrategyExecutor({ session, strategy, mode, onSessionStop }) 
   const entryPriceRef      = useRef(null)
   const prevLtpRef         = useRef(null)
   const inFlightRef        = useRef(false)
+  const fatalRef           = useRef(false)
   const patternDetectedRef = useRef(false)
-  const candleCacheRef     = useRef(null)   // { data: [], fetchedAt: ms }
-  const sessionTradesRef   = useRef([])     // [{ pnlPct }] per completed trade
+  const candleCacheRef     = useRef(null)
+  const sessionTradesRef   = useRef([])
   const modeRef            = useRef(mode)
   const onStopRef          = useRef(onSessionStop)
+  const onErrorRef         = useRef(onError)
 
   useEffect(() => { modeRef.current = mode }, [mode])
   useEffect(() => { onStopRef.current = onSessionStop }, [onSessionStop])
+  useEffect(() => { onErrorRef.current = onError }, [onError])
 
   function patchPhase(p) {
     phaseRef.current = p
@@ -405,6 +408,7 @@ export function useStrategyExecutor({ session, strategy, mode, onSessionStop }) 
     prevLtpRef.current         = null
     entryPriceRef.current      = null
     inFlightRef.current        = false
+    fatalRef.current           = false
     patternDetectedRef.current = false
     candleCacheRef.current     = null
     sessionTradesRef.current   = []
@@ -426,8 +430,18 @@ export function useStrategyExecutor({ session, strategy, mode, onSessionStop }) 
 
     let cancelled = false
 
+    function fatal(msg) {
+      if (cancelled || fatalRef.current) return
+      fatalRef.current = true
+      addLog(`FATAL: ${msg} — execution stopped`, 'error')
+      patchPhase('idle')
+      axiosInstance.post('/api/customer/session/stop').catch(() => {})
+      onErrorRef.current?.(msg)
+      onStopRef.current?.({ reason: 'error', message: msg })
+    }
+
     async function tick() {
-      if (cancelled || inFlightRef.current) return
+      if (cancelled || inFlightRef.current || fatalRef.current) return
       const ph = phaseRef.current
       if (ph === 'idle' || ph === 'exited') return
 
@@ -437,8 +451,8 @@ export function useStrategyExecutor({ session, strategy, mode, onSessionStop }) 
           params: { symbol: strategy.instrument, exchange: strategy.exchange },
         })
         currentLtp = data.ltp
-      } catch {
-        if (!cancelled) addLog('Price fetch failed', 'error')
+      } catch (err) {
+        if (!cancelled) fatal(err.response?.data?.error || 'Price fetch failed')
         return
       }
 
@@ -555,10 +569,7 @@ export function useStrategyExecutor({ session, strategy, mode, onSessionStop }) 
                 addLog(`${dir.entry} ${strategy.quantity}×${strategy.instrument} @ ₹${currentLtp}`, 'success')
               }
             } catch (err) {
-              if (!cancelled) {
-                addLog(`${dir.entry} failed: ${err.response?.data?.error || err.message}`, 'error')
-                patchPhase('monitoring')
-              }
+              if (!cancelled) fatal(`${dir.entry} order failed: ${err.response?.data?.error || err.message}`)
             } finally {
               inFlightRef.current = false
             }
@@ -605,10 +616,7 @@ export function useStrategyExecutor({ session, strategy, mode, onSessionStop }) 
               })
             }
           } catch (err) {
-            if (!cancelled) {
-              addLog(`${dir.exit} failed: ${err.response?.data?.error || err.message}`, 'error')
-              patchPhase('in_position')
-            }
+            if (!cancelled) fatal(`${dir.exit} order failed: ${err.response?.data?.error || err.message}`)
           } finally {
             inFlightRef.current = false
           }

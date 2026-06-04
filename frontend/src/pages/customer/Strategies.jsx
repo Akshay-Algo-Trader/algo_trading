@@ -275,24 +275,49 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected
 }
 
 // ── Strategy card ─────────────────────────────────────────────────────────────
-function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode, kiteConnected, onChart, chartActive }) {
+function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode, kiteConnected, onChart, chartActive, selected, onSelect }) {
   const isActivating = activating === strategy.id
-  const hasSession = !!activeSessionId
+  const isThisSessionActive = activeSessionId != null && strategy.id === activeSessionId
+  const hasOtherSession = activeSessionId != null && strategy.id !== activeSessionId
   const liveBlocked = mode === 'live' && !kiteConnected
 
+  const borderClass = isThisSessionActive
+    ? 'border-blue-400 ring-2 ring-blue-200'
+    : selected
+      ? 'border-indigo-400 ring-2 ring-indigo-100'
+      : 'border-gray-200'
+
   return (
-    <div className="bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md transition-shadow p-5 flex flex-col gap-4">
+    <div
+      className={`bg-white rounded-xl border shadow-sm hover:shadow-md transition-shadow p-5 flex flex-col gap-4 cursor-pointer ${borderClass}`}
+      onClick={() => !isThisSessionActive && onSelect(strategy.id)}
+    >
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-semibold text-gray-900">{strategy.name}</h3>
-          {strategy.description && (
-            <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{strategy.description}</p>
-          )}
+        <div className="flex items-center gap-2 min-w-0">
+          <div className={`flex-shrink-0 w-4 h-4 rounded-full border-2 flex items-center justify-center transition-colors ${
+            isThisSessionActive
+              ? 'border-blue-500 bg-blue-500'
+              : selected
+                ? 'border-indigo-500 bg-indigo-500'
+                : 'border-gray-300 bg-white'
+          }`}>
+            {(selected || isThisSessionActive) && (
+              <div className="w-1.5 h-1.5 rounded-full bg-white" />
+            )}
+          </div>
+          <div className="min-w-0">
+            <h3 className="font-semibold text-gray-900">{strategy.name}</h3>
+            {strategy.description && (
+              <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{strategy.description}</p>
+            )}
+          </div>
         </div>
         <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded-full font-medium ${
-          strategy.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-500'
+          isThisSessionActive ? 'bg-blue-100 text-blue-700'
+          : strategy.is_active ? 'bg-green-100 text-green-700'
+          : 'bg-gray-100 text-gray-500'
         }`}>
-          {strategy.is_active ? 'Active' : 'Inactive'}
+          {isThisSessionActive ? 'Running' : strategy.is_active ? 'Available' : 'Inactive'}
         </span>
       </div>
 
@@ -344,7 +369,7 @@ function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode,
         </div>
       )}
 
-      <div className="flex gap-2">
+      <div className="flex gap-2" onClick={e => e.stopPropagation()}>
         <button
           onClick={() => onChart(strategy)}
           className={`flex-shrink-0 flex items-center gap-1.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-colors ${
@@ -361,21 +386,26 @@ function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode,
         </button>
         <button
           onClick={() => onActivate(strategy.id)}
-          disabled={hasSession || isActivating || !strategy.is_active || liveBlocked}
+          disabled={isThisSessionActive || hasOtherSession || isActivating || !strategy.is_active || liveBlocked || !selected}
           className={`flex-1 py-2.5 rounded-lg text-sm font-semibold transition-colors ${
-            hasSession || !strategy.is_active || liveBlocked
-              ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
-              : 'bg-blue-600 hover:bg-blue-700 text-white'
+            isThisSessionActive
+              ? 'bg-blue-100 text-blue-700 cursor-default'
+              : hasOtherSession || !strategy.is_active || liveBlocked || !selected
+                ? 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                : 'bg-indigo-600 hover:bg-indigo-700 text-white'
           }`}
           title={
-            liveBlocked  ? 'Kite not connected — contact admin'
-            : hasSession ? 'Stop the current active session first'
+            liveBlocked       ? 'Kite not connected — contact admin'
+            : hasOtherSession ? 'Stop the current active session first'
+            : !selected       ? 'Select this strategy first'
             : undefined
           }
         >
-          {isActivating ? 'Activating…'
-            : hasSession ? 'Session Already Active'
-            : liveBlocked ? 'Kite Not Connected'
+          {isActivating      ? 'Activating…'
+            : isThisSessionActive ? 'Session Active'
+            : hasOtherSession    ? 'Another Strategy Running'
+            : liveBlocked        ? 'Kite Not Connected'
+            : !selected          ? 'Select to Activate'
             : 'Activate Strategy'}
         </button>
       </div>
@@ -386,16 +416,18 @@ function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode,
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function Strategies() {
   const { mode } = useTradingStore()
-  const [strategies, setStrategies]       = useState([])
-  const [activeSession, setActiveSession] = useState(null)
+  const [strategies, setStrategies]         = useState([])
+  const [activeSession, setActiveSession]   = useState(null)
   const [activeStrategy, setActiveStrategy] = useState(null)
-  const [kiteConnected, setKiteConnected] = useState(false)
-  const [loading, setLoading]             = useState(true)
-  const [activating, setActivating]       = useState(null)
-  const [stopping, setStopping]           = useState(false)
-  const [error, setError]                 = useState('')
-  const [success, setSuccess]             = useState('')
-  const [chartStrategy, setChartStrategy] = useState(null)
+  const [kiteConnected, setKiteConnected]   = useState(false)
+  const [loading, setLoading]               = useState(true)
+  const [activating, setActivating]         = useState(null)
+  const [stopping, setStopping]             = useState(false)
+  const [error, setError]                   = useState('')
+  const [success, setSuccess]               = useState('')
+  const [chartStrategy, setChartStrategy]   = useState(null)
+  const [selectedStrategyId, setSelectedStrategyId] = useState(null)
+  const [executionError, setExecutionError]         = useState('')
 
   function handleChart(strategy) {
     setChartStrategy(prev => prev?.id === strategy.id ? null : strategy)
@@ -411,6 +443,7 @@ export default function Strategies() {
       const sess = dashRes.data.active_session || null
       setActiveSession(sess)
       setActiveStrategy(sess?.strategy || null)
+      if (sess?.strategy?.id) setSelectedStrategyId(sess.strategy.id)
       setKiteConnected(dashRes.data.kite?.is_connected === true)
     } catch {
       setError('Failed to load strategies.')
@@ -421,9 +454,22 @@ export default function Strategies() {
 
   useEffect(() => { loadData() }, []) // eslint-disable-line
 
+  const handleExecutionError = useCallback((msg) => {
+    setExecutionError(msg)
+    setActiveSession(null)
+    setActiveStrategy(null)
+    setSelectedStrategyId(null)
+    loadData()
+  }, []) // eslint-disable-line
+
   const handleSessionStop = useCallback((result) => {
     setActiveSession(null)
     setActiveStrategy(null)
+    setSelectedStrategyId(null)
+    if (result?.reason === 'error') {
+      // handled by handleExecutionError; nothing extra needed here
+      return
+    }
     if (result?.reason === 'executed') {
       const pnl = result.entryPrice != null && result.exitPrice != null
         ? ((result.exitPrice - result.entryPrice) / result.entryPrice * 100).toFixed(2)
@@ -448,6 +494,7 @@ export default function Strategies() {
     strategy: activeStrategy,
     mode,
     onSessionStop: handleSessionStop,
+    onError: handleExecutionError,
   })
 
   async function handleActivate(strategyId) {
@@ -458,6 +505,7 @@ export default function Strategies() {
     setActivating(strategyId)
     setError('')
     setSuccess('')
+    setExecutionError('')
     try {
       await axiosInstance.post('/api/customer/session/start', { strategy_id: strategyId, mode })
       setSuccess({ type: 'activated', mode })
@@ -479,6 +527,7 @@ export default function Strategies() {
       setSuccess('')
       setActiveSession(null)
       setActiveStrategy(null)
+      setSelectedStrategyId(null)
       await loadData()
     } catch {
       setError('Failed to stop session.')
@@ -501,17 +550,33 @@ export default function Strategies() {
         <div>
           <h1 className="text-xl font-bold text-gray-900">Strategies</h1>
           <p className="text-sm text-gray-500 mt-0.5">
-            Activate a strategy to start the auto-trading engine in{' '}
+            Select one strategy, then activate it to start the auto-trading engine in{' '}
             <span className={`font-semibold ${mode === 'live' ? 'text-green-600' : 'text-blue-600'}`}>
               {mode}
             </span>{' '}
-            mode.
+            mode. Only one strategy can run at a time.
           </p>
         </div>
       </div>
 
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">{error}</div>
+      )}
+
+      {executionError && (
+        <div className="bg-red-50 border border-red-300 rounded-xl px-5 py-4 flex items-start gap-3">
+          <div className="w-8 h-8 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0 mt-0.5">
+            <svg className="w-4 h-4 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+            </svg>
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-semibold text-red-800">Execution Failed — Strategy Stopped</p>
+            <p className="text-sm text-red-700 mt-1">{executionError}</p>
+            <p className="text-xs text-red-500 mt-1">The session has been stopped. Check the execution log for details.</p>
+          </div>
+          <button onClick={() => setExecutionError('')} className="text-red-400 hover:text-red-600 flex-shrink-0">✕</button>
+        </div>
       )}
       {success && (
         success.type === 'executed' ? (
@@ -594,13 +659,15 @@ export default function Strategies() {
               <StrategyCard
                 key={s.id}
                 strategy={s}
-                activeSessionId={activeSession?.id}
+                activeSessionId={activeStrategy?.id}
                 onActivate={handleActivate}
                 activating={activating}
                 mode={mode}
                 kiteConnected={kiteConnected}
                 onChart={handleChart}
                 chartActive={chartStrategy?.id === s.id}
+                selected={selectedStrategyId === s.id}
+                onSelect={id => !activeStrategy && setSelectedStrategyId(prev => prev === id ? null : id)}
               />
             ))}
           </div>

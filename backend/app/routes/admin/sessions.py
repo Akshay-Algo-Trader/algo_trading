@@ -65,6 +65,7 @@ def audit_logs():
     per_page = min(request.args.get('per_page', 50, type=int), 200)
     user_id = request.args.get('user_id', type=int)
     mode = request.args.get('mode')
+    event_type = request.args.get('event_type')
     date_from = request.args.get('date_from')
     date_to = request.args.get('date_to')
 
@@ -73,6 +74,8 @@ def audit_logs():
         query = query.filter_by(user_id=user_id)
     if mode:
         query = query.filter_by(mode=mode)
+    if event_type:
+        query = query.filter_by(event_type=event_type)
     if date_from:
         query = query.filter(AuditLog.created_at >= date_from)
     if date_to:

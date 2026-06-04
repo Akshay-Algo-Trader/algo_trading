@@ -7,11 +7,67 @@ import {
 } from 'recharts'
 
 const INDEX_OPTIONS = [
-  { value: 'NIFTY50',   label: 'NIFTY 50' },
-  { value: 'SENSEX',    label: 'SENSEX' },
+  { value: 'INDICES',   label: 'INDICES'    },
+  { value: 'NIFTY50',   label: 'NIFTY 50'  },
+  { value: 'SENSEX',    label: 'SENSEX'     },
   { value: 'BANKNIFTY', label: 'BANK NIFTY' },
-  { value: 'COMMODITY', label: 'COMMODITY' },
+  { value: 'COMMODITY', label: 'COMMODITY'  },
 ]
+
+const PAGE_SIZE_STOCKS = 50
+
+function Pagination({ page, totalPages, total, pageSize, onPage }) {
+  if (totalPages <= 1) return null
+  const from = (page - 1) * pageSize + 1
+  const to   = Math.min(page * pageSize, total)
+
+  function pages() {
+    if (totalPages <= 7) return Array.from({ length: totalPages }, (_, i) => i + 1)
+    if (page <= 4)       return [1, 2, 3, 4, 5, '…', totalPages]
+    if (page >= totalPages - 3) return [1, '…', totalPages - 4, totalPages - 3, totalPages - 2, totalPages - 1, totalPages]
+    return [1, '…', page - 1, page, page + 1, '…', totalPages]
+  }
+
+  return (
+    <div className="flex items-center justify-between flex-wrap gap-3 px-1">
+      <span className="text-xs text-gray-500">
+        Showing {from}–{to} of {total} instruments
+      </span>
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => onPage(page - 1)} disabled={page === 1}
+          className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        {pages().map((p, i) =>
+          p === '…' ? (
+            <span key={`e${i}`} className="px-1.5 text-xs text-gray-400">…</span>
+          ) : (
+            <button
+              key={p} onClick={() => onPage(p)}
+              className={`min-w-[30px] h-[30px] rounded-lg text-xs font-medium transition-colors ${
+                p === page ? 'bg-blue-600 text-white' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {p}
+            </button>
+          )
+        )}
+        <button
+          onClick={() => onPage(page + 1)} disabled={page === totalPages}
+          className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-100 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+        >
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+          </svg>
+        </button>
+      </div>
+    </div>
+  )
+}
 
 function fmt(n) {
   if (n == null) return '—'
@@ -452,16 +508,25 @@ export default function Market() {
   const [toast, setToast] = useState('')
   const timerRef = useRef(null)
 
+  const isIndices = selectedIndex === 'INDICES'
+
   const load = useCallback(async (silent = false) => {
     if (!silent) setLoading(true)
     else setRefreshing(true)
     try {
-      const { data } = await axiosInstance.get('/api/customer/market/stocks', {
-        params: { index: selectedIndex, page },
-      })
-      setStocks(data.stocks || [])
-      setTotal(data.total || 0)
-      setTotalPages(data.total_pages || 1)
+      if (selectedIndex === 'INDICES') {
+        const { data } = await axiosInstance.get('/api/customer/market/indices')
+        setStocks(data.indices || [])
+        setTotal(data.total || 0)
+        setTotalPages(1)
+      } else {
+        const { data } = await axiosInstance.get('/api/customer/market/stocks', {
+          params: { index: selectedIndex, page },
+        })
+        setStocks(data.stocks || [])
+        setTotal(data.total || 0)
+        setTotalPages(data.total_pages || 1)
+      }
       setError('')
     } catch {
       setError('Failed to load market data.')
@@ -494,8 +559,8 @@ export default function Market() {
   )
 
   const indexLabel = INDEX_OPTIONS.find(o => o.value === selectedIndex)?.label || selectedIndex
-  const pageStart = (page - 1) * 50 + 1
-  const pageEnd = Math.min(page * 50, total)
+  const pageStart  = isIndices ? 1 : (page - 1) * PAGE_SIZE_STOCKS + 1
+  const pageEnd    = isIndices ? total : Math.min(page * PAGE_SIZE_STOCKS, total)
 
   if (loading) {
     return (
@@ -600,8 +665,8 @@ export default function Market() {
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filtered.map((stock, idx) => {
-                const pos = stock.change == null ? null : stock.change >= 0
-                const rowNum = pageStart + stocks.indexOf(stock)
+                const pos    = stock.change == null ? null : stock.change >= 0
+                const rowNum = pageStart + idx
                 return (
                   <tr key={`${stock.exchange}:${stock.symbol}`} className="hover:bg-gray-50 transition-colors">
                     <td className="px-5 py-3.5 text-gray-400 text-xs">{rowNum}</td>
@@ -626,18 +691,22 @@ export default function Market() {
                     </td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center justify-center gap-2">
-                        <button
-                          onClick={() => setOrderModal({ stock, side: 'BUY' })}
-                          className="px-3.5 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg transition-colors"
-                        >
-                          BUY
-                        </button>
-                        <button
-                          onClick={() => setOrderModal({ stock, side: 'SELL' })}
-                          className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors"
-                        >
-                          SELL
-                        </button>
+                        {!isIndices && (
+                          <>
+                            <button
+                              onClick={() => setOrderModal({ stock, side: 'BUY' })}
+                              className="px-3.5 py-1.5 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-lg transition-colors"
+                            >
+                              BUY
+                            </button>
+                            <button
+                              onClick={() => setOrderModal({ stock, side: 'SELL' })}
+                              className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg transition-colors"
+                            >
+                              SELL
+                            </button>
+                          </>
+                        )}
                         <button
                           onClick={() => setChartModal(stock)}
                           className="px-3.5 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-bold rounded-lg transition-colors flex items-center gap-1"
@@ -664,32 +733,15 @@ export default function Market() {
         </div>
       </div>
 
-      {/* Pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center justify-between flex-wrap gap-3">
-          <span className="text-xs text-gray-500">
-            Showing {pageStart}–{pageEnd} of {total} instruments
-          </span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-              disabled={page === 1}
-              className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              ← Prev
-            </button>
-            <span className="text-sm text-gray-600 font-medium px-2">
-              {page} / {totalPages}
-            </span>
-            <button
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-              disabled={page === totalPages}
-              className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-            >
-              Next →
-            </button>
-          </div>
-        </div>
+      {/* Pagination — only for server-paged indices (stocks), not the flat indices list */}
+      {!isIndices && (
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          total={total}
+          pageSize={PAGE_SIZE_STOCKS}
+          onPage={setPage}
+        />
       )}
 
       <p className="text-xs text-gray-400 text-center">
