@@ -193,7 +193,7 @@ function fmt(n) {
 }
 
 // ── Execution Engine panel ────────────────────────────────────────────────────
-function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, onStop }) {
+function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected, onStop }) {
   const slPrice = entryPrice != null ? entryPrice * (1 - strategy.stop_loss_pct / 100) : null
   const tpPrice = entryPrice != null ? entryPrice * (1 + strategy.take_profit_pct / 100) : null
   const pnlPct  = entryPrice != null && ltp != null ? ((ltp - entryPrice) / entryPrice * 100) : null
@@ -208,6 +208,11 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, onStop }) {
             <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${PHASE_STYLE[phase]}`}>
               {PHASE_LABEL[phase]}
             </span>
+            {strategy.candle_pattern && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${patternDetected ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
+                {patternDetected ? `Pattern: ${strategy.candle_pattern.name} ✓` : `Awaiting pattern: ${strategy.candle_pattern.name}`}
+              </span>
+            )}
           </div>
           <p className="text-xs text-gray-500 mt-0.5">
             {strategy.name} · {strategy.instrument} ({strategy.exchange}) · refreshes every 15s
@@ -438,7 +443,7 @@ export default function Strategies() {
     loadData()
   }, []) // eslint-disable-line
 
-  const { phase, ltp, entryPrice, logs } = useStrategyExecutor({
+  const { phase, ltp, entryPrice, logs, patternDetected } = useStrategyExecutor({
     session: activeSession,
     strategy: activeStrategy,
     mode,
@@ -559,6 +564,7 @@ export default function Strategies() {
           ltp={ltp}
           entryPrice={entryPrice}
           logs={logs}
+          patternDetected={patternDetected}
           onStop={handleManualStop}
         />
       )}

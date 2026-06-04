@@ -204,6 +204,170 @@ const CONDITION_TYPES = ['price_above', 'price_below', 'price_cross_up', 'price_
 const EXCHANGES   = ['NSE', 'BSE', 'MCX']
 const ORDER_TYPES = ['MARKET', 'LIMIT']
 
+const SL_RULE_PARAMS = [
+  {
+    key: 'candle_size_max_pct',
+    label: 'Max Candle Size %',
+    type: 'number',
+    hint: "Skip this trade if today's candle is too large (which would force a very wide stop loss). Value: maximum allowed candle height as a % of the stock price. Example: 2 = skip the trade if the candle moved more than 2% from its highest to lowest point that day.",
+  },
+  {
+    key: 'exit_below_first_candle_low',
+    label: 'Exit if Price Falls Below Entry Candle Low',
+    type: 'bool',
+    hint: "Select true to automatically exit the trade if the price falls below the lowest point of the candle that triggered the trade entry. This means the original setup has failed and it is safer to exit. Select false to rely only on the Stop Loss % instead.",
+  },
+  {
+    key: 'trailing_stop_pct',
+    label: 'Trailing Stop %',
+    type: 'number',
+    hint: "A stop loss that automatically moves up as the price rises, locking in profits. Value: the % gap it keeps below the highest price reached since entry. Example: 2 = if the stock rises to ₹110, the stop moves to ₹107.8 (2% below ₹110) and never moves back down.",
+  },
+  {
+    key: 'atr_multiplier',
+    label: 'Volatility-Based Stop (ATR Multiplier)',
+    type: 'number',
+    hint: "Sets the stop loss distance based on how much the stock typically moves each day — more volatile stocks get a wider stop automatically. Value: multiplier applied to the stock's average daily movement. Example: 2 = stop is placed 2× the stock's typical daily range below the entry price.",
+  },
+  {
+    key: 'break_even_after_pct',
+    label: 'Move Stop to Break-Even After %',
+    type: 'number',
+    hint: "Once the trade is in profit by this %, automatically move the stop loss to the exact entry price — so you cannot lose money on this trade even if it reverses. Example: 1.5 = once the stock is 1.5% above your entry, your stop loss moves to your entry price.",
+  },
+]
+
+const TARGET_RULE_PARAMS = [
+  {
+    key: 'pct_target_1',
+    label: 'First Profit Target %',
+    type: 'number',
+    hint: "The first price level at which to sell part of the position and take some profit. Value: % gain from the entry price. Example: 1.5 = sell a portion of the trade when the stock is 1.5% above your entry price.",
+  },
+  {
+    key: 'pct_target_2',
+    label: 'Second Profit Target %',
+    type: 'number',
+    hint: "A higher price level to take additional profits from the remaining position. Value: % gain from the entry price. Example: 3 = sell another portion when the stock is 3% above your entry price (must be higher than Target 1).",
+  },
+  {
+    key: 'pct_target_3',
+    label: 'Third Profit Target %',
+    type: 'number',
+    hint: "The final (highest) price level to exit the remaining position. Value: % gain from the entry price. Example: 5 = sell the last remaining quantity when the stock is 5% above your entry price.",
+  },
+  {
+    key: 'risk_reward_ratio',
+    label: 'Risk to Reward Ratio',
+    type: 'number',
+    hint: "Automatically calculates your profit target based on your stop loss. Value: how many times the risk you want as reward. Example: 2 = if your stop loss is 1% below entry (your risk), the target is set at 2% above entry. A ratio of 2 or higher is generally considered good practice.",
+  },
+  {
+    key: 'book_partial_at_pct',
+    label: 'Sell Partial Position At %',
+    type: 'number',
+    hint: "Sell a portion of your holding once this % profit is reached, and keep the rest running for more gains. Example: 1 = when the stock is 1% above your entry, sell part of your position to secure some profit while staying invested for further upside.",
+  },
+]
+
+const SL_PARAM_MAP    = Object.fromEntries(SL_RULE_PARAMS.map(p => [p.key, p]))
+const TARGET_PARAM_MAP = Object.fromEntries(TARGET_RULE_PARAMS.map(p => [p.key, p]))
+
+function rulesObjToRows(obj, paramMap) {
+  if (!obj || typeof obj !== 'object') return []
+  return Object.entries(obj).map(([k, v]) => ({ param: k, value: String(v) }))
+    .filter(r => r.param in paramMap)
+}
+
+function rowsToRulesObj(rows) {
+  const out = {}
+  for (const r of rows) {
+    if (!r.param || r.value === '') continue
+    const meta = SL_PARAM_MAP[r.param] ?? TARGET_PARAM_MAP[r.param]
+    out[r.param] = meta?.type === 'bool'
+      ? r.value === 'true'
+      : parseFloat(r.value)
+  }
+  return Object.keys(out).length ? out : null
+}
+
+function RulesEditor({ rows, onChange, paramDefs, addLabel }) {
+  const paramMap = Object.fromEntries(paramDefs.map(p => [p.key, p]))
+  const usedKeys = new Set(rows.map(r => r.param))
+
+  function setRow(idx, key, val) {
+    onChange(rows.map((r, i) => i === idx ? { ...r, [key]: val } : r))
+  }
+  function addRow() {
+    const next = paramDefs.find(p => !usedKeys.has(p.key))
+    if (!next) return
+    onChange([...rows, { param: next.key, value: '' }])
+  }
+  function removeRow(idx) {
+    onChange(rows.filter((_, i) => i !== idx))
+  }
+
+  return (
+    <div>
+      <div className="space-y-2">
+        {rows.map((row, idx) => {
+          const meta = paramMap[row.param]
+          return (
+            <div key={idx} className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <select
+                  value={row.param}
+                  onChange={e => setRow(idx, 'param', e.target.value)}
+                  className="flex-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#eb5202]"
+                >
+                  {paramDefs.map(p => (
+                    <option key={p.key} value={p.key} disabled={usedKeys.has(p.key) && p.key !== row.param}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+                {meta?.type === 'bool' ? (
+                  <select
+                    value={row.value}
+                    onChange={e => setRow(idx, 'value', e.target.value)}
+                    className="w-32 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#eb5202]"
+                  >
+                    <option value="">—</option>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                ) : (
+                  <input
+                    type="number"
+                    value={row.value}
+                    onChange={e => setRow(idx, 'value', e.target.value)}
+                    placeholder="Value"
+                    className="w-32 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#eb5202]"
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => removeRow(idx)}
+                  className="text-red-400 hover:text-red-600 text-lg leading-none"
+                  title="Remove"
+                >×</button>
+              </div>
+              {meta?.hint && (
+                <p className="text-xs text-gray-400 pl-1">{meta.hint}</p>
+              )}
+            </div>
+          )
+        })}
+      </div>
+      {rows.length < paramDefs.length && (
+        <button type="button" onClick={addRow} className="mt-2 text-xs text-[#eb5202] hover:underline">
+          + {addLabel}
+        </button>
+      )}
+    </div>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 export default function StrategyEdit() {
   const { id }   = useParams()
@@ -226,6 +390,8 @@ export default function StrategyEdit() {
     candle_pattern_id: '',
     is_active: true,
   })
+  const [slRulesRows, setSlRulesRows]         = useState([])
+  const [targetRulesRows, setTargetRulesRows] = useState([])
 
   useEffect(() => {
     Promise.all([
@@ -250,6 +416,8 @@ export default function StrategyEdit() {
         candle_pattern_id: s.candle_pattern_id ? String(s.candle_pattern_id) : '',
         is_active:         s.is_active ?? true,
       })
+      setSlRulesRows(rulesObjToRows(s.stop_loss_rules, SL_PARAM_MAP))
+      setTargetRulesRows(rulesObjToRows(s.target_rules, TARGET_PARAM_MAP))
       setAllUsers(ur.data?.users ?? ur.data ?? [])
       setSelectedUsers(new Set(s.assigned_user_ids ?? []))
     }).catch(() => navigate('/admin/strategies'))
@@ -275,6 +443,8 @@ export default function StrategyEdit() {
         quantity:        parseInt(form.quantity),
         stop_loss_pct:   parseFloat(form.stop_loss_pct),
         take_profit_pct: parseFloat(form.take_profit_pct),
+        stop_loss_rules:   rowsToRulesObj(slRulesRows),
+        target_rules:      rowsToRulesObj(targetRulesRows),
         entry_condition:   { type: form.entry_type, value: parseFloat(form.entry_value) },
         exit_condition:    form.exit_value ? { type: form.exit_type, value: parseFloat(form.exit_value) } : null,
         candle_pattern_id: form.candle_pattern_id ? parseInt(form.candle_pattern_id) : null,
@@ -391,6 +561,40 @@ export default function StrategyEdit() {
             <FormField label="Take Profit %">
               <Input type="number" step="0.01" min={0} value={form.take_profit_pct} onChange={set('take_profit_pct')} required />
             </FormField>
+          </div>
+
+          {/* Stop Loss Rules */}
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-1">
+            Stop Loss Rules
+            <span className="font-normal normal-case ml-1 text-gray-400">— optional advanced rules (override or supplement Stop Loss %)</span>
+          </p>
+          <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <RulesEditor
+              rows={slRulesRows}
+              onChange={setSlRulesRows}
+              paramDefs={SL_RULE_PARAMS}
+              addLabel="Add stop loss rule"
+            />
+            {slRulesRows.length === 0 && (
+              <p className="text-xs text-gray-400 mb-1">No rules configured — using Stop Loss % only.</p>
+            )}
+          </div>
+
+          {/* Target Rules */}
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+            Target Rules
+            <span className="font-normal normal-case ml-1 text-gray-400">— optional advanced rules (override or supplement Take Profit %)</span>
+          </p>
+          <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <RulesEditor
+              rows={targetRulesRows}
+              onChange={setTargetRulesRows}
+              paramDefs={TARGET_RULE_PARAMS}
+              addLabel="Add target rule"
+            />
+            {targetRulesRows.length === 0 && (
+              <p className="text-xs text-gray-400 mb-1">No rules configured — using Take Profit % only.</p>
+            )}
           </div>
 
           {/* Conditions */}

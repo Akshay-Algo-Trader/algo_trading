@@ -45,6 +45,13 @@ def create_pattern():
     return jsonify({'pattern': pattern.to_dict()}), 201
 
 
+@admin_candle_patterns_bp.get('/api/admin/candle-patterns/<int:pattern_id>')
+@admin_required
+def get_pattern(pattern_id):
+    pattern = CandlePattern.query.get_or_404(pattern_id)
+    return jsonify(pattern.to_dict()), 200
+
+
 @admin_candle_patterns_bp.put('/api/admin/candle-patterns/<int:pattern_id>')
 @admin_required
 def update_pattern(pattern_id):

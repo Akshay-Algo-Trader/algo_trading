@@ -8,7 +8,8 @@ import Dashboard   from './pages/admin/Dashboard'
 import Customers   from './pages/admin/Customers'
 import Strategies      from './pages/admin/Strategies'
 import StrategyEdit    from './pages/admin/StrategyEdit'
-import CandlePatterns  from './pages/admin/CandlePatterns'
+import CandlePatterns     from './pages/admin/CandlePatterns'
+import CandlePatternEdit  from './pages/admin/CandlePatternEdit'
 import KiteConfig  from './pages/admin/KiteConfig'
 import Sessions    from './pages/admin/Sessions'
 import Orders      from './pages/admin/Orders'
@@ -53,7 +54,8 @@ export default function App() {
           <Route path="customers"   element={<Customers />} />
           <Route path="strategies"          element={<Strategies />} />
           <Route path="strategies/:id/edit" element={<StrategyEdit />} />
-          <Route path="candle-patterns"     element={<CandlePatterns />} />
+          <Route path="candle-patterns"              element={<CandlePatterns />} />
+          <Route path="candle-patterns/:id/edit"   element={<CandlePatternEdit />} />
           <Route path="kite-config" element={<KiteConfig />} />
           <Route path="sessions"    element={<Sessions />} />
           <Route path="orders"      element={<Orders />} />
