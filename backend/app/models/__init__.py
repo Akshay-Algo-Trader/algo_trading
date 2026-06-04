@@ -12,6 +12,7 @@ from app.models.paper_position import PaperPosition
 from app.models.virtual_account import VirtualAccount
 from app.models.audit_log import AuditLog
 from app.models.instrument import Instrument
+from app.models.execution_log import ExecutionLog
 
 __all__ = [
     'User',
@@ -35,4 +36,5 @@ __all__ = [
     'VirtualAccount',
     'AuditLog',
     'Instrument',
+    'ExecutionLog',
 ]

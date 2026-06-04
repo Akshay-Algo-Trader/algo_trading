@@ -193,10 +193,19 @@ function fmt(n) {
 }
 
 // ── Execution Engine panel ────────────────────────────────────────────────────
-function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected, onStop }) {
-  const slPrice = entryPrice != null ? entryPrice * (1 - strategy.stop_loss_pct / 100) : null
-  const tpPrice = entryPrice != null ? entryPrice * (1 + strategy.take_profit_pct / 100) : null
-  const pnlPct  = entryPrice != null && ltp != null ? ((ltp - entryPrice) / entryPrice * 100) : null
+function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected, planState, onStop }) {
+  const dir = strategy.candle_pattern?.direction === 'bearish' ? 'bearish' : 'bullish'
+  const pnlPct = entryPrice != null && ltp != null
+    ? (dir === 'bearish'
+        ? (entryPrice - ltp) / entryPrice * 100
+        : (ltp - entryPrice) / entryPrice * 100)
+    : null
+  const slPrice = planState?.sl ?? (entryPrice != null
+    ? entryPrice * (1 + (dir === 'bearish' ? 1 : -1) * strategy.stop_loss_pct / 100)
+    : null)
+  const tpPrice = planState?.finalTp ?? (entryPrice != null
+    ? entryPrice * (1 + (dir === 'bearish' ? -1 : 1) * strategy.take_profit_pct / 100)
+    : null)
 
   return (
     <div className="bg-white rounded-xl border border-blue-200 shadow-sm p-5 space-y-4">
@@ -237,7 +246,10 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected
           <p className="font-bold text-gray-900 mt-0.5">{fmt(entryPrice)}</p>
         </div>
         <div className="bg-red-50 rounded-lg p-3">
-          <p className="text-xs text-red-400 font-medium">Stop Loss</p>
+          <p className="text-xs text-red-400 font-medium">
+            Stop Loss
+            {(strategy.stop_loss_rules?.trailing_stop_pct || strategy.stop_loss_rules?.break_even_after_pct) ? ' (dynamic)' : ''}
+          </p>
           <p className="font-bold text-red-700 mt-0.5">{slPrice != null ? fmt(slPrice) : `${strategy.stop_loss_pct}%`}</p>
         </div>
         <div className="bg-green-50 rounded-lg p-3">
@@ -246,7 +258,52 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected
         </div>
       </div>
 
-      {/* P&L bar (only when in position) */}
+      {/* Position size — only when multi-leg plan active */}
+      {planState && planState.total > 0 && (planState.targets.length > 0 || planState.partialBook) && (
+        <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-4 py-2 flex items-center justify-between text-sm">
+          <span className="text-indigo-700 font-medium">Open position</span>
+          <span className="text-indigo-900 font-semibold font-mono">
+            {planState.remaining} / {planState.total} {strategy.instrument}
+          </span>
+        </div>
+      )}
+
+      {/* Target ladder */}
+      {planState?.targets?.length > 0 && (
+        <div>
+          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Target Ladder</p>
+          <div className="grid grid-cols-3 gap-2">
+            {planState.targets.map(t => (
+              <div
+                key={t.index}
+                className={`rounded-lg p-2.5 border ${t.hit ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}
+              >
+                <p className={`text-xs font-semibold ${t.hit ? 'text-green-700' : 'text-gray-500'}`}>
+                  T{t.index + 1} ({t.pct}%) {t.hit && '✓'}
+                </p>
+                <p className={`font-mono text-sm font-bold mt-0.5 ${t.hit ? 'text-green-800' : 'text-gray-700'}`}>
+                  {fmt(t.price)}
+                </p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {planState?.partialBook && (
+        <div className={`rounded-lg p-2.5 border flex items-center justify-between ${planState.partialBook.booked ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'}`}>
+          <div>
+            <p className={`text-xs font-semibold ${planState.partialBook.booked ? 'text-green-700' : 'text-gray-500'}`}>
+              Partial Book (50%) at {planState.partialBook.pct}% {planState.partialBook.booked && '✓'}
+            </p>
+          </div>
+          <p className={`font-mono text-sm font-bold ${planState.partialBook.booked ? 'text-green-800' : 'text-gray-700'}`}>
+            {fmt(planState.partialBook.price)}
+          </p>
+        </div>
+      )}
+
+      {/* P&L bar */}
       {pnlPct != null && (
         <div className={`rounded-lg px-4 py-2 text-sm font-semibold flex items-center justify-between ${
           pnlPct >= 0 ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
@@ -489,7 +546,7 @@ export default function Strategies() {
     loadData()
   }, []) // eslint-disable-line
 
-  const { phase, ltp, entryPrice, logs, patternDetected } = useStrategyExecutor({
+  const { phase, ltp, entryPrice, logs, patternDetected, planState } = useStrategyExecutor({
     session: activeSession,
     strategy: activeStrategy,
     mode,
@@ -630,6 +687,7 @@ export default function Strategies() {
           entryPrice={entryPrice}
           logs={logs}
           patternDetected={patternDetected}
+          planState={planState}
           onStop={handleManualStop}
         />
       )}

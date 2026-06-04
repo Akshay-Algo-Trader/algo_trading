@@ -9,10 +9,17 @@ const DURATIONS = [
 ]
 
 const EXIT_LABELS = {
-  stop_loss:      { text: 'Stop Loss',   cls: 'bg-red-100 text-red-700'    },
-  take_profit:    { text: 'Take Profit', cls: 'bg-green-100 text-green-700' },
-  end_of_period:  { text: 'Period End',  cls: 'bg-gray-100 text-gray-600'  },
-  exit_condition: { text: 'Exit Cond.', cls: 'bg-blue-100 text-blue-700'   },
+  stop_loss:             { text: 'Stop Loss',       cls: 'bg-red-100 text-red-700'    },
+  take_profit:           { text: 'Take Profit',     cls: 'bg-green-100 text-green-700' },
+  take_profit_t1:        { text: 'Target 1',        cls: 'bg-green-100 text-green-700' },
+  take_profit_t2:        { text: 'Target 2',        cls: 'bg-green-100 text-green-700' },
+  take_profit_t3:        { text: 'Target 3',        cls: 'bg-green-100 text-green-700' },
+  multi_target:          { text: 'Multi-Target',    cls: 'bg-emerald-100 text-emerald-700' },
+  partial_book:          { text: 'Partial Book',    cls: 'bg-teal-100 text-teal-700'   },
+  partial_then_sl:       { text: 'Partial → SL',    cls: 'bg-orange-100 text-orange-700' },
+  first_candle_violated: { text: 'Structure Stop',  cls: 'bg-red-100 text-red-700'    },
+  end_of_period:         { text: 'Period End',      cls: 'bg-gray-100 text-gray-600'  },
+  exit_condition:        { text: 'Exit Cond.',      cls: 'bg-blue-100 text-blue-700'  },
 }
 
 const PAGE_SIZE = 10
