@@ -3,6 +3,7 @@ import axiosInstance from '../api/axiosInstance'
 import { BACKTEST_DURATIONS } from './BacktestPanel'
 
 export const SCAN_UNIVERSES = [
+  { value: 'INTRADAY',  label: 'Intraday Indices',  hint: 'NIFTY, BANKNIFTY, SENSEX futures' },
   { value: 'NIFTY50',   label: 'NIFTY 50 stocks',  hint: '50 NSE equities' },
   { value: 'SENSEX',    label: 'SENSEX 30',        hint: '30 BSE equities' },
   { value: 'BANKNIFTY', label: 'BANKNIFTY',        hint: '12 NSE bank stocks' },
@@ -25,7 +26,7 @@ export default function PatternScanPanel({
   onPatternChange,   // (id) => void  — set to null to hide the picker
   lockedPattern,     // when set, used INSTEAD of the dropdown (for the modal use-case)
 }) {
-  const [universe, setUniverse] = useState('NIFTY50')
+  const [universe, setUniverse] = useState('INTRADAY')
   const [days,     setDays]     = useState(90)
   const [applyFilters, setApplyFilters] = useState(false)
   const [loading,  setLoading]  = useState(false)

@@ -166,6 +166,15 @@ def _universe_symbols(universe: str) -> list[dict]:
         _NIFTY50_SYMBOLS, _SENSEX_SYMBOLS, _BANKNIFTY_SYMBOLS, _INDICES_LIST,
     )
     u = (universe or '').upper().replace(' ', '')
+    if u == 'INTRADAY' or u == 'INTRADAYINDICES':
+        intraday_indices = [
+            'NIFTY 50', 'NIFTY NEXT 50', 'NIFTY MIDCAP 50',
+            'NIFTY BANK', 'SENSEX',
+        ]
+        return [
+            {'symbol': i['symbol'], 'exchange': i['exchange']}
+            for i in _INDICES_LIST if i['symbol'] in intraday_indices
+        ]
     if u == 'NIFTY50':
         return [{'symbol': s, 'exchange': 'NSE'} for s in _NIFTY50_SYMBOLS]
     if u == 'SENSEX':
