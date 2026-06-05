@@ -40,6 +40,16 @@ function planStateFromServer(serverPlanState) {
     detCandleHigh:  serverPlanState.det_candle_high,
     exitBelowFirstCandle: Boolean(serverPlanState.exit_below_first_candle),
     direction:      serverPlanState.direction,
+    resolvedContract: serverPlanState.resolved_contract
+      ? {
+          tradingsymbol:   serverPlanState.resolved_contract.tradingsymbol,
+          exchange:        serverPlanState.resolved_contract.exchange,
+          strike:          serverPlanState.resolved_contract.strike,
+          expiry:          serverPlanState.resolved_contract.expiry,
+          optionType:      serverPlanState.resolved_contract.option_type,
+          instrumentToken: serverPlanState.resolved_contract.instrument_token,
+        }
+      : null,
   }
 }
 

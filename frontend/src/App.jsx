@@ -14,6 +14,7 @@ import KiteConfig  from './pages/admin/KiteConfig'
 import Sessions    from './pages/admin/Sessions'
 import Orders      from './pages/admin/Orders'
 import Logs        from './pages/admin/Logs'
+import AdminBacktest from './pages/admin/Backtest'
 
 // Customer
 import CustomerLogin     from './pages/customer/Login'
@@ -58,6 +59,7 @@ export default function App() {
           <Route path="candle-patterns"              element={<CandlePatterns />} />
           <Route path="candle-patterns/:id/edit"   element={<CandlePatternEdit />} />
           <Route path="kite-config" element={<KiteConfig />} />
+          <Route path="backtest"    element={<AdminBacktest />} />
           <Route path="sessions"    element={<Sessions />} />
           <Route path="orders"      element={<Orders />} />
           <Route path="logs"        element={<Logs />} />

@@ -656,6 +656,154 @@ def _simulate(strategy_dict, all_candles):
     return detections, trades
 
 
+def _simulate_options(strategy_dict, all_candles, kite, option_config):
+    """
+    Options-mode backtest. Pattern detection runs on the underlying candles, but
+    each entry is simulated against the historical premium series of the
+    resolved CE/PE contract. Detection days where no live NFO/BFO contract can
+    be resolved are returned in `skipped_dates`.
+    """
+    from app.services.option_resolver import resolve_option_contract
+    from datetime import datetime as _dt
+
+    pattern   = _j(strategy_dict.get('candle_pattern'), {}) or {}
+    direction = pattern.get('direction', 'bullish')
+    ind_cfg   = _j(pattern.get('indicator_settings'), {})
+    trade_cfg = _j(pattern.get('trade_filters'), {})
+    warmup    = _required_warmup(ind_cfg, trade_cfg)
+    quantity  = int(strategy_dict.get('quantity') or 1)
+
+    underlying       = (option_config or {}).get('underlying', 'NIFTY')
+    strike_selection = (option_config or {}).get('strike_selection', 'ATM')
+    expiry_policy    = (option_config or {}).get('expiry', 'current_week')
+
+    detections    = []
+    trades        = []
+    skipped_dates = []
+
+    i = warmup
+    while i < len(all_candles):
+        det_window = all_candles[:i + 1]
+
+        pattern_ok = (
+            _check_pattern(pattern, det_window)
+            and _check_indicators(ind_cfg, det_window)
+            and _check_trend_filter(trade_cfg, det_window)
+        )
+        if not pattern_ok:
+            i += 1
+            continue
+
+        det = all_candles[i]
+        detections.append({
+            'date': det['date'], 'candle': det,
+            'pattern_name': pattern.get('name', 'Pattern'),
+        })
+
+        if i + 1 >= len(all_candles):
+            i += 1
+            continue
+
+        entry_c = all_candles[i + 1]
+
+        if not _check_day_filter(trade_cfg, entry_c['date']):
+            i += 1
+            continue
+        if not _check_loss_limit(trade_cfg, trades):
+            i += 1
+            continue
+        if not _check_candle_size(strategy_dict, det):
+            i += 1
+            continue
+
+        # Resolve the option contract as of the detection day (using detection
+        # close as the underlying LTP — entry happens at next-day open).
+        try:
+            det_date = _dt.strptime(det['date'], '%Y-%m-%d').date()
+        except Exception:
+            skipped_dates.append(det['date'])
+            i += 1
+            continue
+
+        contract = resolve_option_contract(
+            underlying=underlying, direction=direction,
+            strike_selection=strike_selection, expiry=expiry_policy,
+            ltp_at_entry=det['close'], kite=kite, as_of=det_date,
+        )
+        if not contract:
+            skipped_dates.append(det['date'])
+            i += 1
+            continue
+
+        # Pull option premium daily candles from entry day through contract expiry
+        try:
+            entry_date = _dt.strptime(entry_c['date'], '%Y-%m-%d').date()
+            expiry_date = _dt.strptime(contract['expiry'], '%Y-%m-%d').date()
+            premium_raw = kite.historical_data(
+                contract['instrument_token'],
+                entry_date.strftime('%Y-%m-%d'),
+                expiry_date.strftime('%Y-%m-%d'),
+                'day',
+            )
+        except Exception as exc:
+            logger.warning("Premium history fetch failed for %s: %s", contract['tradingsymbol'], exc)
+            skipped_dates.append(det['date'])
+            i += 1
+            continue
+
+        if not premium_raw:
+            skipped_dates.append(det['date'])
+            i += 1
+            continue
+
+        premium_candles = [{
+            'date':   c['date'].strftime('%Y-%m-%d'),
+            'open':   c['open'], 'high': c['high'],
+            'low':    c['low'],  'close': c['close'],
+            'volume': c.get('volume', 0),
+        } for c in premium_raw]
+
+        entry_price = premium_candles[0]['open']
+        # Long option position regardless of underlying direction
+        plan_det_candle = {'low': 0.0, 'high': float('inf'), 'close': entry_price}
+        plan = _build_trade_plan(strategy_dict, det_window, entry_price, plan_det_candle, 'bullish')
+        fills = _simulate_exits(plan, quantity, premium_candles)
+        qty_total, vwap_exit, reason, pnl, pnl_pct = _summarize_fills(fills, entry_price, 'bullish')
+        last_fill_date = fills[-1]['date'] if fills else entry_c['date']
+
+        trades.append({
+            'detection_date': det['date'],
+            'entry_date':     entry_c['date'],
+            'entry_price':    round(entry_price, 2),
+            'exit_date':      last_fill_date,
+            'exit_price':     round(vwap_exit, 2),
+            'exit_reason':    reason,
+            'pnl':            round(pnl, 2),
+            'pnl_pct':        round(pnl_pct, 2),
+            'direction':      direction.upper(),
+            'instrument':     contract['tradingsymbol'],
+            'exchange':       contract['exchange'],
+            'option_strike':  contract['strike'],
+            'option_expiry':  contract['expiry'],
+            'option_type':    contract['option_type'],
+            'fills':          [
+                {'qty': int(f['qty']), 'price': round(f['price'], 2),
+                 'date': f['date'], 'reason': f['reason']} for f in fills
+            ],
+        })
+
+        # Advance past last fill date in the underlying timeline
+        last_fill_index = i + 1
+        if fills:
+            for j in range(i + 1, len(all_candles)):
+                if all_candles[j]['date'] == fills[-1]['date']:
+                    last_fill_index = j
+                    break
+        i = last_fill_index + 1
+
+    return detections, trades, skipped_dates
+
+
 # ─── Endpoint ─────────────────────────────────────────────────────────────────
 
 @customer_backtest_bp.post('/api/customer/backtest')
@@ -688,14 +836,27 @@ def run_backtest():
     try:
         from kiteconnect import KiteConnect
         from app.routes.customer.market import _resolve_token
+        from app.services.option_resolver import meta_for as _option_meta_for
 
         kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
         kite.set_access_token(decrypt(config.access_token_encrypted))
 
-        exchange_str = strategy.exchange.value if hasattr(strategy.exchange, 'value') else str(strategy.exchange)
-        token = _resolve_token(strategy.instrument, exchange_str, kite)
+        option_config = strategy.option_config if isinstance(strategy.option_config, dict) else None
+        options_mode  = bool(option_config and option_config.get('enabled'))
+
+        if options_mode:
+            meta = _option_meta_for(option_config.get('underlying') or 'NIFTY')
+            if not meta:
+                return jsonify({'error': f"Unknown underlying: {option_config.get('underlying')!r}"}), 400
+            candle_symbol   = meta['underlying_symbol']
+            candle_exchange = meta['underlying_exchange']
+        else:
+            candle_symbol   = strategy.instrument
+            candle_exchange = strategy.exchange.value if hasattr(strategy.exchange, 'value') else str(strategy.exchange)
+
+        token = _resolve_token(candle_symbol, candle_exchange, kite)
         if not token:
-            return jsonify({'error': f'{exchange_str}:{strategy.instrument} not found — refresh instruments'}), 404
+            return jsonify({'error': f'{candle_exchange}:{candle_symbol} not found — refresh instruments'}), 404
 
         now_ist   = datetime.now(_IST)
         to_date   = now_ist.date()
@@ -730,7 +891,11 @@ def run_backtest():
         # Keep days + warmup candles so first day in simulation window has proper history
         sim_candles = all_candles[-(days + warmup):]
 
-        detections, trades = _simulate(strategy_dict, sim_candles)
+        if options_mode:
+            detections, trades, skipped_dates = _simulate_options(strategy_dict, sim_candles, kite, option_config)
+        else:
+            detections, trades = _simulate(strategy_dict, sim_candles)
+            skipped_dates = []
 
         winning  = [t for t in trades if t['pnl_pct'] > 0]
         losing   = [t for t in trades if t['pnl_pct'] <= 0]
@@ -758,6 +923,7 @@ def run_backtest():
             'candles_analyzed':   len(report_candles),
             'pattern_detections': detections,
             'trades':             trades,
+            'skipped_dates':      skipped_dates,
             'summary': {
                 'total_patterns_identified': len(detections),
                 'total_trades_executed':     len(trades),

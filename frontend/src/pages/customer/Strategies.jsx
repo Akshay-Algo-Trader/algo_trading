@@ -226,6 +226,11 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected
           <p className="text-xs text-gray-500 mt-0.5">
             {strategy.name} · {strategy.instrument} ({strategy.exchange}) · refreshes every 15s
           </p>
+          {planState?.resolvedContract && (
+            <p className="text-xs font-semibold text-orange-600 mt-0.5">
+              Option: {planState.resolvedContract.tradingsymbol} ({planState.resolvedContract.exchange}, expiry {planState.resolvedContract.expiry})
+            </p>
+          )}
         </div>
         <button
           onClick={onStop}

@@ -66,6 +66,7 @@ from app.routes.customer.backtest import (
     _required_warmup,
 )
 from app.services.encryption import decrypt
+from app.services.option_resolver import meta_for as _option_meta_for, resolve_option_contract
 from app.services.ticker_service import ticker_service
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,10 @@ class TradingEngine:
         self._instrument_token: Optional[int] = None
         self._needs_candles: bool = False
         self._candle_days_needed: int = 60
+
+        # Options mode (resolved at entry when strategy.option_config.enabled)
+        self._option_config: Optional[dict] = None
+        self._resolved_contract: Optional[dict] = None
 
         # In-memory mutable state — also serialised into TradingSession.plan_state
         self._phase: str = 'monitoring'
@@ -252,8 +257,31 @@ class TradingEngine:
             raise ValueError(f'Strategy {self.strategy_id} not found')
 
         self._strategy_dict = strategy.to_dict()
-        self._symbol = strategy.instrument
-        self._exchange = strategy.exchange.value
+
+        # If option_config.enabled, monitoring watches the underlying index;
+        # the option contract is only resolved at entry. Otherwise use the
+        # strategy's configured instrument/exchange directly.
+        opt_cfg = self._strategy_dict.get('option_config') or {}
+        if isinstance(opt_cfg, dict) and opt_cfg.get('enabled'):
+            self._option_config = opt_cfg
+            meta = _option_meta_for(opt_cfg.get('underlying') or '')
+            if not meta:
+                raise ValueError(f"Unknown underlying in option_config: {opt_cfg.get('underlying')!r}")
+            self._symbol = meta['underlying_symbol']
+            self._exchange = meta['underlying_exchange']
+        else:
+            self._option_config = None
+            self._symbol = strategy.instrument
+            self._exchange = strategy.exchange.value
+
+        # Restore previously-resolved contract (resume case)
+        plan_state_preview = session.plan_state or {}
+        prev_contract = (plan_state_preview or {}).get('resolved_contract') if isinstance(plan_state_preview, dict) else None
+        if prev_contract:
+            self._resolved_contract = prev_contract
+            self._symbol = prev_contract['tradingsymbol']
+            self._exchange = prev_contract['exchange']
+
         self._quantity = int(strategy.quantity or 0)
         self._stop_loss_pct = float(strategy.stop_loss_pct or 0)
         self._take_profit_pct = float(strategy.take_profit_pct or 0)
@@ -288,11 +316,14 @@ class TradingEngine:
             self._remaining_qty = 0
 
         # Try resolving instrument token & subscribing to ticker
-        try:
-            inst = Instrument.query.filter_by(tradingsymbol=self._symbol, exchange=self._exchange).first()
-            self._instrument_token = inst.instrument_token if inst else None
-        except Exception:
-            self._instrument_token = None
+        if self._resolved_contract:
+            self._instrument_token = int(self._resolved_contract['instrument_token'])
+        else:
+            try:
+                inst = Instrument.query.filter_by(tradingsymbol=self._symbol, exchange=self._exchange).first()
+                self._instrument_token = inst.instrument_token if inst else None
+            except Exception:
+                self._instrument_token = None
 
         if self._instrument_token:
             try:
@@ -318,9 +349,14 @@ class TradingEngine:
 
     def _serialize_plan_state(self) -> Optional[dict]:
         if not self._plan:
+            # Still surface the resolved contract during monitoring → in_position
+            # transition so the customer UI can render it before the plan persists.
+            if self._resolved_contract:
+                return {'resolved_contract': self._resolved_contract}
             return None
         sl = self._current_sl_price()
         return {
+            'resolved_contract': self._resolved_contract,
             'direction':    self._plan['direction'],
             'sign':         self._plan['sign'],
             'entry_price':  self._plan['entry_price'],
@@ -571,21 +607,40 @@ class TradingEngine:
 
         # Build plan and place entry
         det_candle = closed_candles[-1] if closed_candles else {'low': ltp, 'high': ltp, 'close': ltp}
-        plan = _build_trade_plan(self._strategy_dict, closed_candles or [], ltp, det_candle, self._direction)
 
-        success = self._place_entry_order(ltp, plan)
+        # Options leg: resolve the actual CE/PE contract, swap the engine over to
+        # it, and use the option premium (not the index LTP) as the entry price.
+        # The position is always long, so the trade plan is built bullish-side.
+        entry_price = ltp
+        plan_direction = self._direction
+        plan_det_candle = det_candle
+        if self._option_config:
+            opt = self._swap_to_option_contract(ltp)
+            if not opt:
+                return
+            opt_ltp = self._poll_option_ltp()
+            if opt_ltp is None:
+                self._log("Option resolved but premium LTP unavailable — aborting entry", 'error')
+                return
+            entry_price = opt_ltp
+            plan_direction = 'bullish'
+            plan_det_candle = {'low': 0.0, 'high': float('inf'), 'close': opt_ltp}
+
+        plan = _build_trade_plan(self._strategy_dict, closed_candles or [], entry_price, plan_det_candle, plan_direction)
+
+        success = self._place_entry_order(entry_price, plan)
         if not success:
             return
 
         self._plan = plan
-        self._hwm = ltp
-        self._lwm = ltp
+        self._hwm = entry_price
+        self._lwm = entry_price
         self._total_qty = self._quantity
         self._remaining_qty = self._quantity
         self._targets_hit = set()
         self._partial_booked = False
         self._break_even_triggered = False
-        self._entry_price = ltp
+        self._entry_price = entry_price
         self._phase = 'in_position'
 
         # Compose informative log
@@ -595,8 +650,8 @@ class TradingEngine:
             ladder = ' | targets: ' + ', '.join(f"T{t['index']+1}@{t['pct']}%" for t in plan['targets'])
         elif plan['partial_book']:
             ladder = f" | partial-book 50% @ {plan['partial_book']['pct']}%"
-        side = 'BUY' if self._direction == 'bullish' else 'SELL'
-        self._log(f"{side} {self._quantity}×{self._symbol} @ ₹{ltp} | SL {sl_src}{ladder}", 'success')
+        side = self._entry_side()
+        self._log(f"{side} {self._quantity}×{self._symbol} @ ₹{entry_price} | SL {sl_src}{ladder}", 'success')
 
         self._persist_session_state()
 
@@ -738,10 +793,80 @@ class TradingEngine:
     # ──────────────────────────────────────────────────────────────────────
 
     def _entry_side(self) -> str:
+        # Long options only — never short CE/PE
+        if self._option_config:
+            return 'BUY'
         return 'BUY' if self._direction == 'bullish' else 'SELL'
 
     def _exit_side(self) -> str:
+        if self._option_config:
+            return 'SELL'
         return 'SELL' if self._direction == 'bullish' else 'BUY'
+
+    def _swap_to_option_contract(self, underlying_ltp: float) -> Optional[dict]:
+        """Resolve CE/PE contract, unsubscribe underlying, subscribe option."""
+        cfg = self._option_config or {}
+        cfg_get = cfg.get
+        try:
+            from kiteconnect import KiteConnect
+            kcfg = KiteConfig.query.filter_by(user_id=self.user_id).first()
+            if not (kcfg and kcfg.is_connected and kcfg.access_token_encrypted):
+                self._log("Cannot resolve option — Kite not connected", 'error')
+                return None
+            kite = KiteConnect(api_key=decrypt(kcfg.api_key_encrypted))
+            kite.set_access_token(decrypt(kcfg.access_token_encrypted))
+            contract = resolve_option_contract(
+                underlying=cfg_get('underlying') or 'NIFTY',
+                direction=self._direction,
+                strike_selection=cfg_get('strike_selection') or 'ATM',
+                expiry=cfg_get('expiry') or 'current_week',
+                ltp_at_entry=underlying_ltp,
+                kite=kite,
+            )
+        except Exception as exc:
+            self._log(f"Option resolution failed: {exc}", 'error')
+            return None
+
+        if not contract:
+            self._log(
+                f"No option contract found for {cfg_get('underlying')} "
+                f"{cfg_get('strike_selection')} {cfg_get('expiry')} "
+                f"@ underlying ₹{underlying_ltp:.2f}",
+                'error',
+            )
+            return None
+
+        prev_token = self._instrument_token
+        self._symbol = contract['tradingsymbol']
+        self._exchange = contract['exchange']
+        self._instrument_token = int(contract['instrument_token'])
+        self._resolved_contract = contract
+
+        try:
+            if prev_token:
+                ticker_service.unsubscribe([prev_token])
+        except Exception:
+            logger.warning("Failed to unsubscribe underlying token %s", prev_token, exc_info=True)
+        try:
+            ticker_service.subscribe([self._instrument_token])
+        except Exception:
+            logger.warning("Failed to subscribe option token %s", self._instrument_token, exc_info=True)
+
+        self._log(
+            f"Option resolved: {contract['tradingsymbol']} ({contract['exchange']}, "
+            f"strike {contract['strike']}, expiry {contract['expiry']})",
+            'info',
+        )
+        return contract
+
+    def _poll_option_ltp(self, attempts: int = 4, delay_seconds: float = 0.5) -> Optional[float]:
+        """WebSocket may not have warmed for the new token yet — retry briefly."""
+        for _ in range(attempts):
+            v = self._get_ltp()
+            if v is not None:
+                return v
+            time.sleep(delay_seconds)
+        return None
 
     def _place_entry_order(self, ltp: float, plan: dict) -> bool:
         return self._place_order(self._entry_side(), self._quantity, ltp, tag='entry')
@@ -831,7 +956,7 @@ class TradingEngine:
                 'symbol': self._symbol, 'exchange': self._exchange,
                 'transaction_type': txn_type, 'order_type': 'MARKET',
                 'quantity': qty, 'price': 0,
-                'product': 'NRML' if self._exchange == 'MCX' else 'MIS',
+                'product': 'NRML' if self._exchange in ('MCX', 'NFO', 'BFO') else 'MIS',
                 'variety': 'regular', 'tag': tag, 'mode': 'live',
             }, session_id=self.session_id)
         except (ValueError, RuntimeError) as exc:
