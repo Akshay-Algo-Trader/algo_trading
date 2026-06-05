@@ -29,6 +29,16 @@ def _j(val, default=None):
     return val if val is not None else default
 
 
+def _num(v, default=None):
+    """Coerce v to float; return default if not numeric."""
+    if v is None or v == '':
+        return default
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return default
+
+
 # ─── Candle-pattern logic (mirrors useStrategyExecutor.js) ────────────────────
 
 def _check_candle_condition(cond, candles):
@@ -158,6 +168,19 @@ def _calc_sma(candles, period):
     return sum(c['close'] for c in candles[-period:]) / period
 
 
+def _calc_atr(candles, period=14):
+    """Average True Range over the most recent `period` candles. Needs `period + 1` history."""
+    if len(candles) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(candles)):
+        h, l, pc = candles[i]['high'], candles[i]['low'], candles[i - 1]['close']
+        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+    if len(trs) < period:
+        return None
+    return sum(trs[-period:]) / period
+
+
 def _check_indicators(settings, candles):
     settings = _j(settings, {})
     if not isinstance(settings, dict) or not settings:
@@ -225,8 +248,52 @@ def _check_trend_filter(filters, candles):
     return not all_bull and not all_bear
 
 
+def _check_day_filter(filters, date_str):
+    """Day-of-week trade filter. UI uses Sun=0..Sat=6."""
+    filters = _j(filters, {})
+    df = (filters if isinstance(filters, dict) else {}).get('day_filter') or {}
+    if not df.get('enabled'):
+        return True
+    try:
+        d = datetime.strptime(date_str, '%Y-%m-%d')
+    except (TypeError, ValueError):
+        return True
+    js_weekday = (d.weekday() + 1) % 7  # Python Mon=0 → JS Sun=0
+    allowed = df.get('days') or [1, 2, 3, 4, 5]
+    return js_weekday in allowed
+
+
+def _check_loss_limit(filters, prior_trades):
+    """Block entries after N consecutive losing trades."""
+    filters = _j(filters, {})
+    ll = (filters if isinstance(filters, dict) else {}).get('loss_limit') or {}
+    if not ll.get('enabled'):
+        return True
+    mx = int(ll.get('max_consecutive_losses') or 2)
+    consec = 0
+    for t in reversed(prior_trades):
+        if t['pnl_pct'] < 0:
+            consec += 1
+        else:
+            break
+    return consec < mx
+
+
+def _check_candle_size(strategy_dict, det_candle):
+    """Pre-entry filter: reject if detection candle range exceeds max % of close."""
+    sl_rules = _j(strategy_dict.get('stop_loss_rules'), {}) or {}
+    max_pct = _num(sl_rules.get('candle_size_max_pct'))
+    if max_pct is None:
+        return True
+    close = det_candle.get('close') or 0
+    if close <= 0:
+        return True
+    rng_pct = (det_candle['high'] - det_candle['low']) / close * 100
+    return rng_pct <= max_pct
+
+
 def _required_warmup(indicator_settings, trade_filters):
-    needed = 10
+    needed = 15  # ATR(14) needs 15 candles
     indicator_settings = _j(indicator_settings, {})
     if isinstance(indicator_settings, dict):
         for key, default in [('rsi', 14), ('ema', 20), ('sma', 50), ('volume', 20)]:
@@ -240,12 +307,266 @@ def _required_warmup(indicator_settings, trade_filters):
     return min(needed, 100)
 
 
+# ─── Trade plan resolver ──────────────────────────────────────────────────────
+
+def _build_trade_plan(strategy_dict, candles_at_entry, entry_price, det_candle, direction):
+    """
+    Resolve all strategy rules into a concrete execution plan applied to one trade.
+
+    candles_at_entry: closed-candle history available at entry-decision time (used for ATR).
+    det_candle: the detection candle whose low/high acts as the structural stop.
+    """
+    sl_pct  = _num(strategy_dict.get('stop_loss_pct'), 2)
+    tp_pct  = _num(strategy_dict.get('take_profit_pct'), 4)
+    sl_rules  = _j(strategy_dict.get('stop_loss_rules'), {}) or {}
+    tgt_rules = _j(strategy_dict.get('target_rules'), {}) or {}
+
+    sign = 1 if direction == 'bullish' else -1
+
+    # Base SL distance: ATR-driven if requested
+    atr_mult = _num(sl_rules.get('atr_multiplier'))
+    base_sl_dist = None
+    if atr_mult is not None and atr_mult > 0:
+        atr = _calc_atr(candles_at_entry, period=14)
+        if atr and atr > 0:
+            base_sl_dist = atr * atr_mult
+    if base_sl_dist is None:
+        base_sl_dist = entry_price * sl_pct / 100
+
+    # Base TP distance: risk-reward-driven if requested
+    rr_ratio = _num(tgt_rules.get('risk_reward_ratio'))
+    if rr_ratio is not None and rr_ratio > 0:
+        base_tp_dist = base_sl_dist * rr_ratio
+    else:
+        base_tp_dist = entry_price * tp_pct / 100
+
+    # Multi-target levels
+    levels = []
+    for key in ('pct_target_1', 'pct_target_2', 'pct_target_3'):
+        v = _num(tgt_rules.get(key))
+        if v is not None and v > 0:
+            levels.append(v)
+    levels.sort()
+    targets = [
+        {'index': idx, 'price': entry_price + sign * (entry_price * pct / 100), 'pct': pct}
+        for idx, pct in enumerate(levels)
+    ]
+
+    # Partial-book — only honored when no multi-targets are set
+    partial_book = None
+    if not targets:
+        bp = _num(tgt_rules.get('book_partial_at_pct'))
+        if bp is not None and bp > 0:
+            partial_book = {
+                'price': entry_price + sign * (entry_price * bp / 100),
+                'fraction': 0.5,
+                'pct': bp,
+            }
+
+    return {
+        'direction': direction,
+        'sign': sign,
+        'entry_price': entry_price,
+        'det_candle_low':  det_candle['low'],
+        'det_candle_high': det_candle['high'],
+        'base_sl_dist': base_sl_dist,
+        'base_tp_dist': base_tp_dist,
+        'initial_sl_price': entry_price - sign * base_sl_dist,
+        'final_tp_price':  entry_price + sign * base_tp_dist,
+        'trail_pct':       _num(sl_rules.get('trailing_stop_pct')),
+        'break_even_pct':  _num(sl_rules.get('break_even_after_pct')),
+        'exit_below_first_candle': bool(sl_rules.get('exit_below_first_candle_low')),
+        'targets': targets,
+        'partial_book': partial_book,
+        'atr_used': atr_mult is not None and base_sl_dist != entry_price * sl_pct / 100,
+    }
+
+
+# ─── Per-candle exit simulator ────────────────────────────────────────────────
+
+def _split_qty(remaining, targets_left):
+    """Equal split of remaining qty across remaining target legs; min 1 share."""
+    if targets_left <= 0:
+        return remaining
+    if targets_left == 1:
+        return remaining
+    return max(1, remaining // targets_left)
+
+
+def _simulate_exits(plan, total_qty, candles_after_entry):
+    """
+    Walk forward candle-by-candle, returning a list of fills.
+
+    Convention when both SL and TP could trigger inside one bar: SL fires first
+    (conservative — favours risk control, matches industry-standard backtests).
+    """
+    direction = plan['direction']
+    sign      = plan['sign']
+    entry     = plan['entry_price']
+
+    hwm = entry  # high water mark — bullish trail anchor
+    lwm = entry  # low water mark  — bearish trail anchor
+    current_sl = plan['initial_sl_price']
+    targets_hit = set()
+    partial_booked = False
+    remaining = total_qty
+    fills = []
+
+    for c in candles_after_entry:
+        if remaining <= 0:
+            break
+        h, l = c['high'], c['low']
+        date = c['date']
+
+        # Update water marks
+        if direction == 'bullish':
+            hwm = max(hwm, h)
+        else:
+            lwm = min(lwm, l)
+
+        # Trailing stop
+        if plan['trail_pct'] is not None and plan['trail_pct'] > 0:
+            if direction == 'bullish':
+                trail = hwm * (1 - plan['trail_pct'] / 100)
+                current_sl = max(current_sl, trail)
+            else:
+                trail = lwm * (1 + plan['trail_pct'] / 100)
+                current_sl = min(current_sl, trail)
+
+        # Break-even lift (once profit threshold met, SL never below entry)
+        if plan['break_even_pct'] is not None and plan['break_even_pct'] > 0:
+            be_trigger = entry * (1 + sign * plan['break_even_pct'] / 100)
+            triggered = (h >= be_trigger) if direction == 'bullish' else (l <= be_trigger)
+            if triggered:
+                if direction == 'bullish':
+                    current_sl = max(current_sl, entry)
+                else:
+                    current_sl = min(current_sl, entry)
+
+        # ── 1. Stop / structural exit (full remaining) ────────────────────────
+        sl_triggered = (l <= current_sl) if direction == 'bullish' else (h >= current_sl)
+        struct_violated = False
+        struct_price = None
+        if plan['exit_below_first_candle']:
+            if direction == 'bullish' and l < plan['det_candle_low']:
+                struct_violated = True
+                struct_price = plan['det_candle_low']
+            elif direction == 'bearish' and h > plan['det_candle_high']:
+                struct_violated = True
+                struct_price = plan['det_candle_high']
+
+        if sl_triggered or struct_violated:
+            # When both could fire in the same bar, the level closer to the open fires first.
+            # Bullish: price falls — higher of (sl, struct) hits first.
+            # Bearish: price rises — lower of  (sl, struct) hits first.
+            if sl_triggered and struct_violated:
+                if direction == 'bullish':
+                    use_sl = current_sl >= struct_price
+                else:
+                    use_sl = current_sl <= struct_price
+            else:
+                use_sl = sl_triggered
+            if use_sl:
+                exit_price, reason = current_sl, 'stop_loss'
+            else:
+                exit_price, reason = struct_price, 'first_candle_violated'
+            fills.append({'qty': remaining, 'price': exit_price, 'date': date, 'reason': reason})
+            remaining = 0
+            break
+
+        # ── 2. Multi-target partial exits (in ascending order for bullish) ────
+        for t in plan['targets']:
+            if t['index'] in targets_hit:
+                continue
+            hit = (h >= t['price']) if direction == 'bullish' else (l <= t['price'])
+            if hit:
+                targets_left = sum(1 for tt in plan['targets'] if tt['index'] not in targets_hit)
+                qty = min(remaining, _split_qty(remaining, targets_left))
+                if qty <= 0:
+                    targets_hit.add(t['index'])
+                    continue
+                fills.append({
+                    'qty': qty,
+                    'price': t['price'],
+                    'date': date,
+                    'reason': f"take_profit_t{t['index'] + 1}",
+                })
+                remaining -= qty
+                targets_hit.add(t['index'])
+                if remaining <= 0:
+                    break
+
+        if remaining <= 0:
+            break
+
+        # ── 3. Single partial book (50% at one level) ─────────────────────────
+        if plan['partial_book'] and not partial_booked:
+            pb = plan['partial_book']
+            hit = (h >= pb['price']) if direction == 'bullish' else (l <= pb['price'])
+            if hit:
+                qty = max(1, int(total_qty * pb['fraction']))
+                qty = min(qty, remaining)
+                fills.append({
+                    'qty': qty, 'price': pb['price'], 'date': date, 'reason': 'partial_book',
+                })
+                remaining -= qty
+                partial_booked = True
+
+        if remaining <= 0:
+            break
+
+        # ── 4. Final TP — only if no multi-targets or all multi-targets hit ───
+        all_targets_done = (not plan['targets']) or (len(targets_hit) == len(plan['targets']))
+        if all_targets_done:
+            final_tp = plan['final_tp_price']
+            hit = (h >= final_tp) if direction == 'bullish' else (l <= final_tp)
+            if hit:
+                fills.append({
+                    'qty': remaining, 'price': final_tp, 'date': date, 'reason': 'take_profit',
+                })
+                remaining = 0
+                break
+
+    # End-of-period flush
+    if remaining > 0 and candles_after_entry:
+        last = candles_after_entry[-1]
+        fills.append({
+            'qty': remaining, 'price': last['close'],
+            'date': last['date'], 'reason': 'end_of_period',
+        })
+
+    return fills
+
+
+def _summarize_fills(fills, entry_price, direction):
+    """Aggregate fills into VWAP exit + dominant reason for display."""
+    qty_total = sum(f['qty'] for f in fills)
+    if qty_total <= 0:
+        return 0, entry_price, 'end_of_period', 0, 0
+    vwap = sum(f['qty'] * f['price'] for f in fills) / qty_total
+    if direction == 'bullish':
+        pnl = (vwap - entry_price) * qty_total
+    else:
+        pnl = (entry_price - vwap) * qty_total
+    pnl_pct = (pnl / (entry_price * qty_total)) * 100 if entry_price > 0 else 0
+
+    reasons = [f['reason'] for f in fills]
+    unique_reasons = set(reasons)
+    if len(unique_reasons) == 1:
+        reason = reasons[0]
+    elif any(r == 'stop_loss' or r == 'first_candle_violated' for r in reasons) and any(r.startswith('take_profit') or r == 'partial_book' for r in reasons):
+        reason = 'partial_then_sl'
+    elif all(r.startswith('take_profit') for r in reasons):
+        reason = 'multi_target'
+    else:
+        reason = reasons[-1]
+    return qty_total, vwap, reason, pnl, pnl_pct
+
+
 # ─── Core simulation ──────────────────────────────────────────────────────────
 
 def _simulate(strategy_dict, all_candles):
     pattern   = _j(strategy_dict.get('candle_pattern'), {}) or {}
-    sl_pct    = float(strategy_dict.get('stop_loss_pct') or 2)
-    tp_pct    = float(strategy_dict.get('take_profit_pct') or 4)
     direction = pattern.get('direction', 'bullish')
     ind_cfg   = _j(pattern.get('indicator_settings'), {})
     trade_cfg = _j(pattern.get('trade_filters'), {})
@@ -257,79 +578,230 @@ def _simulate(strategy_dict, all_candles):
 
     i = warmup
     while i < len(all_candles):
-        window = all_candles[:i + 1]
+        det_window = all_candles[:i + 1]
 
-        if (_check_pattern(pattern, window)
-                and _check_indicators(ind_cfg, window)
-                and _check_trend_filter(trade_cfg, window)):
+        # Pattern + indicator + trend filter (all evaluated on closed candles ≤ i)
+        pattern_ok = _check_pattern(pattern, det_window) and _check_indicators(ind_cfg, det_window) and _check_trend_filter(trade_cfg, det_window)
 
-            det = all_candles[i]
-            detections.append({
-                'date':         det['date'],
-                'candle':       det,
-                'pattern_name': pattern.get('name', 'Pattern'),
-            })
-
-            # Enter at next day's open
-            if i + 1 >= len(all_candles):
-                i += 1
-                continue
-
-            entry_c     = all_candles[i + 1]
-            entry_price = entry_c['open']
-
-            if direction == 'bearish':
-                sl_price = entry_price * (1 + sl_pct / 100)
-                tp_price = entry_price * (1 - tp_pct / 100)
-            else:
-                sl_price = entry_price * (1 - sl_pct / 100)
-                tp_price = entry_price * (1 + tp_pct / 100)
-
-            exit_idx    = len(all_candles) - 1
-            exit_price  = all_candles[-1]['close']
-            exit_reason = 'end_of_period'
-
-            for j in range(i + 2, len(all_candles)):
-                c = all_candles[j]
-                if direction == 'bearish':
-                    if c['high'] >= sl_price:
-                        exit_idx, exit_price, exit_reason = j, sl_price, 'stop_loss'
-                        break
-                    if c['low'] <= tp_price:
-                        exit_idx, exit_price, exit_reason = j, tp_price, 'take_profit'
-                        break
-                else:
-                    if c['low'] <= sl_price:
-                        exit_idx, exit_price, exit_reason = j, sl_price, 'stop_loss'
-                        break
-                    if c['high'] >= tp_price:
-                        exit_idx, exit_price, exit_reason = j, tp_price, 'take_profit'
-                        break
-
-            if direction == 'bearish':
-                pnl_pct = (entry_price - exit_price) / entry_price * 100
-            else:
-                pnl_pct = (exit_price - entry_price) / entry_price * 100
-
-            pnl = pnl_pct / 100 * entry_price * quantity
-
-            trades.append({
-                'detection_date': det['date'],
-                'entry_date':     entry_c['date'],
-                'entry_price':    round(entry_price, 2),
-                'exit_date':      all_candles[exit_idx]['date'],
-                'exit_price':     round(exit_price, 2),
-                'exit_reason':    exit_reason,
-                'pnl':            round(pnl, 2),
-                'pnl_pct':        round(pnl_pct, 2),
-                'direction':      direction.upper(),
-            })
-
-            i = exit_idx + 1
-        else:
+        if not pattern_ok:
             i += 1
+            continue
+
+        det = all_candles[i]
+        detections.append({
+            'date': det['date'], 'candle': det,
+            'pattern_name': pattern.get('name', 'Pattern'),
+        })
+
+        # Need a next-day candle to enter on
+        if i + 1 >= len(all_candles):
+            i += 1
+            continue
+
+        entry_c = all_candles[i + 1]
+        entry_price = entry_c['open']
+
+        # Live-parity pre-entry filters — block entry but keep the detection recorded
+        if not _check_day_filter(trade_cfg, entry_c['date']):
+            i += 1
+            continue
+        if not _check_loss_limit(trade_cfg, trades):
+            i += 1
+            continue
+        if not _check_candle_size(strategy_dict, det):
+            i += 1
+            continue
+
+        # Resolve the full plan, then simulate exits across all subsequent candles
+        plan = _build_trade_plan(strategy_dict, det_window, entry_price, det, direction)
+        # Exit walk starts at entry day itself — same-day SL/TP is realistic
+        candles_after = all_candles[i + 1:]
+        fills = _simulate_exits(plan, quantity, candles_after)
+
+        qty_total, vwap_exit, reason, pnl, pnl_pct = _summarize_fills(fills, entry_price, direction)
+
+        # Find the last fill's date for headline exit_date
+        last_fill_date = fills[-1]['date'] if fills else entry_c['date']
+
+        trades.append({
+            'detection_date': det['date'],
+            'entry_date':     entry_c['date'],
+            'entry_price':    round(entry_price, 2),
+            'exit_date':      last_fill_date,
+            'exit_price':     round(vwap_exit, 2),
+            'exit_reason':    reason,
+            'pnl':            round(pnl, 2),
+            'pnl_pct':        round(pnl_pct, 2),
+            'direction':      direction.upper(),
+            'fills':          [
+                {
+                    'qty':    int(f['qty']),
+                    'price':  round(f['price'], 2),
+                    'date':   f['date'],
+                    'reason': f['reason'],
+                } for f in fills
+            ],
+        })
+
+        # Advance to candle right after the last fill so we don't double-enter
+        last_fill_index = i + 1
+        if fills:
+            # find the candle index matching last fill date
+            for j in range(i + 1, len(all_candles)):
+                if all_candles[j]['date'] == fills[-1]['date']:
+                    last_fill_index = j
+                    break
+        i = last_fill_index + 1
 
     return detections, trades
+
+
+def _simulate_options(strategy_dict, all_candles, kite, option_config):
+    """
+    Options-mode backtest. Pattern detection runs on the underlying candles, but
+    each entry is simulated against the historical premium series of the
+    resolved CE/PE contract. Detection days where no live NFO/BFO contract can
+    be resolved are returned in `skipped_dates`.
+    """
+    from app.services.option_resolver import resolve_option_contract
+    from datetime import datetime as _dt
+
+    pattern   = _j(strategy_dict.get('candle_pattern'), {}) or {}
+    direction = pattern.get('direction', 'bullish')
+    ind_cfg   = _j(pattern.get('indicator_settings'), {})
+    trade_cfg = _j(pattern.get('trade_filters'), {})
+    warmup    = _required_warmup(ind_cfg, trade_cfg)
+    quantity  = int(strategy_dict.get('quantity') or 1)
+
+    underlying       = (option_config or {}).get('underlying', 'NIFTY')
+    strike_selection = (option_config or {}).get('strike_selection', 'ATM')
+    expiry_policy    = (option_config or {}).get('expiry', 'current_week')
+
+    detections    = []
+    trades        = []
+    skipped_dates = []
+
+    i = warmup
+    while i < len(all_candles):
+        det_window = all_candles[:i + 1]
+
+        pattern_ok = (
+            _check_pattern(pattern, det_window)
+            and _check_indicators(ind_cfg, det_window)
+            and _check_trend_filter(trade_cfg, det_window)
+        )
+        if not pattern_ok:
+            i += 1
+            continue
+
+        det = all_candles[i]
+        detections.append({
+            'date': det['date'], 'candle': det,
+            'pattern_name': pattern.get('name', 'Pattern'),
+        })
+
+        if i + 1 >= len(all_candles):
+            i += 1
+            continue
+
+        entry_c = all_candles[i + 1]
+
+        if not _check_day_filter(trade_cfg, entry_c['date']):
+            i += 1
+            continue
+        if not _check_loss_limit(trade_cfg, trades):
+            i += 1
+            continue
+        if not _check_candle_size(strategy_dict, det):
+            i += 1
+            continue
+
+        # Resolve the option contract as of the detection day (using detection
+        # close as the underlying LTP — entry happens at next-day open).
+        try:
+            det_date = _dt.strptime(det['date'], '%Y-%m-%d').date()
+        except Exception:
+            skipped_dates.append(det['date'])
+            i += 1
+            continue
+
+        contract = resolve_option_contract(
+            underlying=underlying, direction=direction,
+            strike_selection=strike_selection, expiry=expiry_policy,
+            ltp_at_entry=det['close'], kite=kite, as_of=det_date,
+        )
+        if not contract:
+            skipped_dates.append(det['date'])
+            i += 1
+            continue
+
+        # Pull option premium daily candles from entry day through contract expiry
+        try:
+            entry_date = _dt.strptime(entry_c['date'], '%Y-%m-%d').date()
+            expiry_date = _dt.strptime(contract['expiry'], '%Y-%m-%d').date()
+            premium_raw = kite.historical_data(
+                contract['instrument_token'],
+                entry_date.strftime('%Y-%m-%d'),
+                expiry_date.strftime('%Y-%m-%d'),
+                'day',
+            )
+        except Exception as exc:
+            logger.warning("Premium history fetch failed for %s: %s", contract['tradingsymbol'], exc)
+            skipped_dates.append(det['date'])
+            i += 1
+            continue
+
+        if not premium_raw:
+            skipped_dates.append(det['date'])
+            i += 1
+            continue
+
+        premium_candles = [{
+            'date':   c['date'].strftime('%Y-%m-%d'),
+            'open':   c['open'], 'high': c['high'],
+            'low':    c['low'],  'close': c['close'],
+            'volume': c.get('volume', 0),
+        } for c in premium_raw]
+
+        entry_price = premium_candles[0]['open']
+        # Long option position regardless of underlying direction
+        plan_det_candle = {'low': 0.0, 'high': float('inf'), 'close': entry_price}
+        plan = _build_trade_plan(strategy_dict, det_window, entry_price, plan_det_candle, 'bullish')
+        fills = _simulate_exits(plan, quantity, premium_candles)
+        qty_total, vwap_exit, reason, pnl, pnl_pct = _summarize_fills(fills, entry_price, 'bullish')
+        last_fill_date = fills[-1]['date'] if fills else entry_c['date']
+
+        trades.append({
+            'detection_date': det['date'],
+            'entry_date':     entry_c['date'],
+            'entry_price':    round(entry_price, 2),
+            'exit_date':      last_fill_date,
+            'exit_price':     round(vwap_exit, 2),
+            'exit_reason':    reason,
+            'pnl':            round(pnl, 2),
+            'pnl_pct':        round(pnl_pct, 2),
+            'direction':      direction.upper(),
+            'instrument':     contract['tradingsymbol'],
+            'exchange':       contract['exchange'],
+            'option_strike':  contract['strike'],
+            'option_expiry':  contract['expiry'],
+            'option_type':    contract['option_type'],
+            'fills':          [
+                {'qty': int(f['qty']), 'price': round(f['price'], 2),
+                 'date': f['date'], 'reason': f['reason']} for f in fills
+            ],
+        })
+
+        # Advance past last fill date in the underlying timeline
+        last_fill_index = i + 1
+        if fills:
+            for j in range(i + 1, len(all_candles)):
+                if all_candles[j]['date'] == fills[-1]['date']:
+                    last_fill_index = j
+                    break
+        i = last_fill_index + 1
+
+    return detections, trades, skipped_dates
 
 
 # ─── Endpoint ─────────────────────────────────────────────────────────────────
@@ -364,14 +836,27 @@ def run_backtest():
     try:
         from kiteconnect import KiteConnect
         from app.routes.customer.market import _resolve_token
+        from app.services.option_resolver import meta_for as _option_meta_for
 
         kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
         kite.set_access_token(decrypt(config.access_token_encrypted))
 
-        exchange_str = strategy.exchange.value if hasattr(strategy.exchange, 'value') else str(strategy.exchange)
-        token = _resolve_token(strategy.instrument, exchange_str, kite)
+        option_config = strategy.option_config if isinstance(strategy.option_config, dict) else None
+        options_mode  = bool(option_config and option_config.get('enabled'))
+
+        if options_mode:
+            meta = _option_meta_for(option_config.get('underlying') or 'NIFTY')
+            if not meta:
+                return jsonify({'error': f"Unknown underlying: {option_config.get('underlying')!r}"}), 400
+            candle_symbol   = meta['underlying_symbol']
+            candle_exchange = meta['underlying_exchange']
+        else:
+            candle_symbol   = strategy.instrument
+            candle_exchange = strategy.exchange.value if hasattr(strategy.exchange, 'value') else str(strategy.exchange)
+
+        token = _resolve_token(candle_symbol, candle_exchange, kite)
         if not token:
-            return jsonify({'error': f'{exchange_str}:{strategy.instrument} not found — refresh instruments'}), 404
+            return jsonify({'error': f'{candle_exchange}:{candle_symbol} not found — refresh instruments'}), 404
 
         now_ist   = datetime.now(_IST)
         to_date   = now_ist.date()
@@ -406,12 +891,23 @@ def run_backtest():
         # Keep days + warmup candles so first day in simulation window has proper history
         sim_candles = all_candles[-(days + warmup):]
 
-        detections, trades = _simulate(strategy_dict, sim_candles)
+        if options_mode:
+            detections, trades, skipped_dates = _simulate_options(strategy_dict, sim_candles, kite, option_config)
+        else:
+            detections, trades = _simulate(strategy_dict, sim_candles)
+            skipped_dates = []
 
         winning  = [t for t in trades if t['pnl_pct'] > 0]
         losing   = [t for t in trades if t['pnl_pct'] <= 0]
-        sl_count = sum(1 for t in trades if t['exit_reason'] == 'stop_loss')
-        tp_count = sum(1 for t in trades if t['exit_reason'] == 'take_profit')
+
+        # Categorize by what stopped the trade. With multi-leg fills the headline
+        # reason is the *last* fill's reason; "partial_then_sl" counts as SL.
+        sl_reasons = {'stop_loss', 'first_candle_violated', 'partial_then_sl'}
+        tp_reasons = {'take_profit', 'multi_target', 'partial_book'}
+        tp_reasons |= {f'take_profit_t{i}' for i in (1, 2, 3)}
+
+        sl_count = sum(1 for t in trades if t['exit_reason'] in sl_reasons)
+        tp_count = sum(1 for t in trades if t['exit_reason'] in tp_reasons)
         total_pnl   = round(sum(t['pnl'] for t in trades), 2)
         accuracy    = round(len(winning) / len(trades) * 100, 1) if trades else 0
         avg_pnl_pct = round(sum(t['pnl_pct'] for t in trades) / len(trades), 2) if trades else 0
@@ -427,6 +923,7 @@ def run_backtest():
             'candles_analyzed':   len(report_candles),
             'pattern_detections': detections,
             'trades':             trades,
+            'skipped_dates':      skipped_dates,
             'summary': {
                 'total_patterns_identified': len(detections),
                 'total_trades_executed':     len(trades),

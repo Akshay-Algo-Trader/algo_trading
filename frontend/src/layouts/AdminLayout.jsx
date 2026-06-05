@@ -38,6 +38,11 @@ const NAV_ITEMS = [
     icon: <Icon d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />,
   },
   {
+    path: '/admin/backtest',
+    label: 'Backtest',
+    icon: <Icon d="M3 3v18h18M7 14l3-3 4 4 5-6" />,
+  },
+  {
     path: '/admin/sessions',
     label: 'Sessions',
     icon: <Icon d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" d2="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />,
@@ -61,6 +66,7 @@ const BREADCRUMB_MAP = {
   strategies: 'Strategies',
   'candle-patterns': 'Candle Patterns',
   'kite-config': 'Kite Config',
+  backtest: 'Backtest',
   sessions: 'Sessions',
   orders: 'Orders',
   logs: 'Logs',

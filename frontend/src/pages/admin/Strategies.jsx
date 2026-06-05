@@ -5,6 +5,7 @@ import {
   Card, Table, SkeletonTable, EmptyRow, ErrorRow, Badge,
   Modal, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
+import BacktestPanel, { BacktestControls } from '../../components/BacktestPanel'
 
 function usePatterns() {
   const [patterns, setPatterns] = useState([])
@@ -272,6 +273,63 @@ function StrategyModal({ isOpen, onClose, onSaved, strategy }) {
 }
 
 
+// ─── Backtest modal ───────────────────────────────────────────────────────────
+function BacktestModal({ isOpen, onClose, strategy }) {
+  const [days,    setDays]    = useState(90)
+  const [loading, setLoading] = useState(false)
+  const [result,  setResult]  = useState(null)
+  const [error,   setError]   = useState('')
+
+  useEffect(() => {
+    // Reset whenever the modal is reopened against a different strategy
+    if (isOpen) {
+      setResult(null)
+      setError('')
+      setDays(90)
+    }
+  }, [isOpen, strategy?.id])
+
+  async function handleRun() {
+    if (!strategy) return
+    setLoading(true)
+    setResult(null)
+    setError('')
+    try {
+      const { data } = await axiosInstance.post('/api/admin/backtest', {
+        strategy_id: strategy.id,
+        days,
+      })
+      setResult(data)
+    } catch (err) {
+      setError(err.response?.data?.error || 'Backtest failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (!strategy) return null
+
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} title={`Backtest — ${strategy.name}`} size="6xl">
+      <div className="space-y-5">
+        <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 flex flex-wrap items-end gap-4">
+          <div className="flex-1 min-w-[200px] text-sm text-gray-700">
+            <span className="font-semibold">{strategy.instrument}</span>
+            <span className="text-gray-400 ml-1 text-xs">({strategy.exchange})</span>
+            {strategy.option_config?.enabled && (
+              <span className="ml-2 text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">
+                {strategy.option_config.underlying} {strategy.option_config.strike_selection} · {strategy.option_config.expiry}
+              </span>
+            )}
+          </div>
+          <BacktestControls days={days} onChangeDays={setDays} onRun={handleRun} loading={loading} />
+        </div>
+        <BacktestPanel result={result} loading={loading} error={error} emptyHint="Pick a duration and click Run Backtest" />
+      </div>
+    </Modal>
+  )
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 const COLS = ['Name', 'Instrument', 'Pattern', 'Order Type', 'Entry Condition', 'SL%', 'TP%', 'Status', 'Actions']
 
@@ -283,6 +341,7 @@ export default function Strategies() {
   const [addOpen, setAddOpen]       = useState(false)
   const [toggling, setToggling]     = useState(null)
   const [deleting, setDeleting]     = useState(null)
+  const [backtestFor, setBacktestFor] = useState(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null)
@@ -360,6 +419,7 @@ export default function Strategies() {
                </td>
                <td className="px-4 py-3">
                  <div className="flex items-center gap-2">
+                   <Btn size="sm" variant="ghost" onClick={() => setBacktestFor(s)}>Backtest</Btn>
                    <Btn size="sm" variant="ghost" onClick={() => navigate(`/admin/strategies/${s.id}/edit`)}>Edit</Btn>
                    <Btn size="sm" variant="danger" onClick={() => deleteStrategy(s)} disabled={deleting === s.id}>
                      {deleting === s.id ? '…' : 'Delete'}
@@ -373,6 +433,11 @@ export default function Strategies() {
       </Card>
 
       <StrategyModal isOpen={addOpen} onClose={() => setAddOpen(false)} onSaved={fetchData} strategy={null} />
+      <BacktestModal
+        isOpen={Boolean(backtestFor)}
+        onClose={() => setBacktestFor(null)}
+        strategy={backtestFor}
+      />
     </div>
   )
 }

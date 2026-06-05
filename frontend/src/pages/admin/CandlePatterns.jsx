@@ -5,6 +5,7 @@ import {
   Card, Table, SkeletonTable, EmptyRow, ErrorRow, Badge,
   Modal, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
+import PatternScanPanel from '../../components/PatternScanPanel'
 
 const PATTERN_TYPES = [
   'bullish_breakout',
@@ -579,6 +580,7 @@ export default function CandlePatterns() {
   const [addOpen, setAddOpen]   = useState(false)
   const [toggling, setToggling] = useState(null)
   const [deleting, setDeleting] = useState(null)
+  const [scanFor,  setScanFor]  = useState(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null)
@@ -656,6 +658,7 @@ export default function CandlePatterns() {
                </td>
                <td className="px-4 py-3">
                  <div className="flex items-center gap-2">
+                   <Btn size="sm" variant="ghost" onClick={() => setScanFor(p)}>Scan</Btn>
                    <Btn size="sm" variant="ghost" onClick={() => navigate(`/admin/candle-patterns/${p.id}/edit`)}>
                      Edit
                    </Btn>
@@ -675,6 +678,17 @@ export default function CandlePatterns() {
         onClose={() => setAddOpen(false)}
         onSaved={fetchData}
       />
+
+      <Modal
+        isOpen={Boolean(scanFor)}
+        onClose={() => setScanFor(null)}
+        title={`Pattern Scan — ${scanFor?.name || ''}`}
+        size="6xl"
+      >
+        {scanFor && (
+          <PatternScanPanel lockedPattern={scanFor} />
+        )}
+      </Modal>
     </div>
   )
 }

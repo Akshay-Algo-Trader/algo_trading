@@ -204,6 +204,19 @@ const CONDITION_TYPES = ['price_above', 'price_below', 'price_cross_up', 'price_
 const EXCHANGES   = ['NSE', 'BSE', 'MCX']
 const ORDER_TYPES = ['MARKET', 'LIMIT']
 
+const UNDERLYINGS         = ['NIFTY', 'SENSEX', 'BANKNIFTY']
+const STRIKE_SELECTIONS   = ['ATM', 'ATM+1', 'ATM-1']
+const EXPIRY_POLICIES     = [
+  { value: 'current_week',  label: 'Current weekly' },
+  { value: 'next_week',     label: 'Next weekly' },
+  { value: 'current_month', label: 'Current month' },
+]
+const UNDERLYING_DISPLAY = {
+  NIFTY:     { symbol: 'NIFTY 50',   exchange: 'NSE' },
+  SENSEX:    { symbol: 'SENSEX',     exchange: 'BSE' },
+  BANKNIFTY: { symbol: 'NIFTY BANK', exchange: 'NSE' },
+}
+
 const SL_RULE_PARAMS = [
   {
     key: 'candle_size_max_pct',
@@ -417,6 +430,10 @@ export default function StrategyEdit() {
     exit_type: 'price_below', exit_value: '',
     candle_pattern_id: '',
     is_active: true,
+    option_enabled: false,
+    option_underlying: 'NIFTY',
+    option_strike_selection: 'ATM',
+    option_expiry: 'current_week',
   })
   const [slRulesRows, setSlRulesRows]         = useState([])
   const [targetRulesRows, setTargetRulesRows] = useState([])
@@ -457,12 +474,21 @@ export default function StrategyEdit() {
         exit_value:        String(s.exit_condition?.value ?? ''),
         candle_pattern_id: s.candle_pattern_id ? String(s.candle_pattern_id) : '',
         is_active:         s.is_active ?? true,
+        option_enabled:           !!s.option_config?.enabled,
+        option_underlying:        s.option_config?.underlying        ?? 'NIFTY',
+        option_strike_selection:  s.option_config?.strike_selection  ?? 'ATM',
+        option_expiry:            s.option_config?.expiry            ?? 'current_week',
       })
       setSlRulesRows(rulesObjToRows(s.stop_loss_rules, SL_PARAM_MAP))
       setTargetRulesRows(rulesObjToRows(s.target_rules, TARGET_PARAM_MAP))
       setAllUsers(ur.data?.users ?? ur.data ?? [])
       setSelectedUsers(new Set(s.assigned_user_ids ?? []))
-      if (instrument) fetchPrice(instrument, exchange)
+      if (s.option_config?.enabled) {
+        const meta = UNDERLYING_DISPLAY[s.option_config.underlying] ?? UNDERLYING_DISPLAY.NIFTY
+        fetchPrice(meta.symbol, meta.exchange)
+      } else if (instrument) {
+        fetchPrice(instrument, exchange)
+      }
     }).catch(() => navigate('/admin/strategies'))
       .finally(() => setLoading(false))
   }, [id, navigate])
@@ -471,17 +497,24 @@ export default function StrategyEdit() {
 
   async function handleSubmit(e) {
     e.preventDefault()
-    const required = ['name', 'instrument', 'quantity', 'stop_loss_pct', 'take_profit_pct', 'entry_value']
+    // When options are enabled the instrument field is hidden and auto-filled
+    // from the underlying selection, so don't require it from the user.
+    const required = form.option_enabled
+      ? ['name', 'quantity', 'stop_loss_pct', 'take_profit_pct', 'entry_value']
+      : ['name', 'instrument', 'quantity', 'stop_loss_pct', 'take_profit_pct', 'entry_value']
     const missing = required.filter(k => !form[k])
     if (missing.length) { setErr(`Required: ${missing.join(', ')}`); return }
 
     setSaving(true); setErr(''); setSaved(false)
+    const optMeta = UNDERLYING_DISPLAY[form.option_underlying] ?? UNDERLYING_DISPLAY.NIFTY
+    const effectiveInstrument = form.option_enabled ? optMeta.symbol  : form.instrument.toUpperCase()
+    const effectiveExchange   = form.option_enabled ? optMeta.exchange : form.exchange
     try {
       await axiosInstance.put(`/api/admin/strategies/${id}`, {
         name:            form.name,
         description:     form.description,
-        instrument:      form.instrument.toUpperCase(),
-        exchange:        form.exchange,
+        instrument:      effectiveInstrument,
+        exchange:        effectiveExchange,
         order_type:      form.order_type,
         quantity:        parseInt(form.quantity),
         stop_loss_pct:   parseFloat(form.stop_loss_pct),
@@ -491,6 +524,10 @@ export default function StrategyEdit() {
         entry_condition:   { type: form.entry_type, value: parseFloat(form.entry_value) },
         exit_condition:    form.exit_value ? { type: form.exit_type, value: parseFloat(form.exit_value) } : null,
         candle_pattern_id: form.candle_pattern_id ? parseInt(form.candle_pattern_id) : null,
+        option_config: form.option_enabled
+          ? { enabled: true, underlying: form.option_underlying,
+              strike_selection: form.option_strike_selection, expiry: form.option_expiry }
+          : null,
         is_active:         form.is_active,
       })
       await axiosInstance.post(`/api/admin/strategies/${id}/assign-bulk`, {
@@ -551,31 +588,95 @@ export default function StrategyEdit() {
             <span className="text-sm font-medium text-gray-700">{form.is_active ? 'Active' : 'Inactive'}</span>
           </div>
 
+          {/* Options trading section */}
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Options Trading</p>
+          <div className="mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+            <div className="flex items-center gap-3 mb-3">
+              <button
+                type="button"
+                onClick={() => {
+                  setForm(f => {
+                    const next = !f.option_enabled
+                    if (next) {
+                      const meta = UNDERLYING_DISPLAY[f.option_underlying] ?? UNDERLYING_DISPLAY.NIFTY
+                      fetchPrice(meta.symbol, meta.exchange)
+                    } else if (f.instrument) {
+                      fetchPrice(f.instrument, f.exchange)
+                    } else {
+                      setCurrentPrice(null)
+                    }
+                    return { ...f, option_enabled: next }
+                  })
+                }}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${form.option_enabled ? 'bg-[#eb5202]' : 'bg-gray-300'}`}
+              >
+                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${form.option_enabled ? 'translate-x-4' : 'translate-x-1'}`} />
+              </button>
+              <span className="text-sm font-medium text-gray-700">
+                {form.option_enabled ? 'Trade as options' : 'Trade underlying (equity / index / MCX)'}
+              </span>
+            </div>
+            {form.option_enabled && (
+              <div className="grid grid-cols-3 gap-x-4">
+                <FormField label={<span className="flex items-center gap-1">Underlying <PriceBadge ltp={currentPrice} loading={priceLoading} /></span>}>
+                  <Select
+                    value={form.option_underlying}
+                    onChange={e => {
+                      const u = e.target.value
+                      setForm(f => ({ ...f, option_underlying: u }))
+                      const meta = UNDERLYING_DISPLAY[u] ?? UNDERLYING_DISPLAY.NIFTY
+                      fetchPrice(meta.symbol, meta.exchange)
+                    }}
+                  >
+                    {UNDERLYINGS.map(u => <option key={u}>{u}</option>)}
+                  </Select>
+                </FormField>
+                <FormField label="Strike">
+                  <Select value={form.option_strike_selection} onChange={set('option_strike_selection')}>
+                    {STRIKE_SELECTIONS.map(s => <option key={s}>{s}</option>)}
+                  </Select>
+                </FormField>
+                <FormField label="Expiry">
+                  <Select value={form.option_expiry} onChange={set('option_expiry')}>
+                    {EXPIRY_POLICIES.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
+                  </Select>
+                </FormField>
+                <p className="col-span-3 text-xs text-gray-500 -mt-1">
+                  Bullish patterns BUY CE, bearish patterns BUY PE. The contract is resolved at entry from the live NFO/BFO chain.
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* Main fields */}
           <div className="grid grid-cols-2 gap-x-6">
             <FormField label="Strategy Name">
               <Input value={form.name} onChange={set('name')} placeholder="MA Crossover" required />
             </FormField>
 
-            <FormField label={<span className="flex items-center gap-1">Instrument <PriceBadge ltp={currentPrice} loading={priceLoading} /></span>}>
-              <InstrumentSearch
-                value={form.instrument}
-                onChange={({ symbol, exchange }) => {
-                  setForm(f => ({ ...f, instrument: symbol, ...(exchange ? { exchange } : {}) }))
-                  if (symbol && symbol.length > 1) fetchPrice(symbol, exchange || form.exchange)
-                  else setCurrentPrice(null)
-                }}
-              />
-            </FormField>
+            {!form.option_enabled && (
+              <FormField label={<span className="flex items-center gap-1">Instrument <PriceBadge ltp={currentPrice} loading={priceLoading} /></span>}>
+                <InstrumentSearch
+                  value={form.instrument}
+                  onChange={({ symbol, exchange }) => {
+                    setForm(f => ({ ...f, instrument: symbol, ...(exchange ? { exchange } : {}) }))
+                    if (symbol && symbol.length > 1) fetchPrice(symbol, exchange || form.exchange)
+                    else setCurrentPrice(null)
+                  }}
+                />
+              </FormField>
+            )}
 
-            <FormField label="Exchange">
-              <Select value={form.exchange} onChange={e => {
-                setForm(f => ({ ...f, exchange: e.target.value }))
-                if (form.instrument) fetchPrice(form.instrument, e.target.value)
-              }}>
-                {EXCHANGES.map(e => <option key={e}>{e}</option>)}
-              </Select>
-            </FormField>
+            {!form.option_enabled && (
+              <FormField label="Exchange">
+                <Select value={form.exchange} onChange={e => {
+                  setForm(f => ({ ...f, exchange: e.target.value }))
+                  if (form.instrument) fetchPrice(form.instrument, e.target.value)
+                }}>
+                  {EXCHANGES.map(e => <option key={e}>{e}</option>)}
+                </Select>
+              </FormField>
+            )}
 
             <FormField label="Order Type">
               <Select value={form.order_type} onChange={set('order_type')}>
