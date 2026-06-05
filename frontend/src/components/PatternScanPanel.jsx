@@ -3,12 +3,13 @@ import axiosInstance from '../api/axiosInstance'
 import { BACKTEST_DURATIONS } from './BacktestPanel'
 
 export const SCAN_UNIVERSES = [
-  { value: 'INTRADAY',  label: 'Intraday Indices',  hint: 'NIFTY, BANKNIFTY, SENSEX futures' },
-  { value: 'NIFTY50',   label: 'NIFTY 50 stocks',  hint: '50 NSE equities' },
-  { value: 'SENSEX',    label: 'SENSEX 30',        hint: '30 BSE equities' },
-  { value: 'BANKNIFTY', label: 'BANKNIFTY',        hint: '12 NSE bank stocks' },
-  { value: 'INDICES',   label: 'Major Indices',    hint: 'NIFTY/SENSEX index list' },
-  { value: 'ALL',       label: 'All of the above', hint: '~110 instruments (slow)' },
+  { value: 'OPTIONS_LAST3M', label: 'Options (Last 3M)',   hint: 'Option contracts from last 3 months' },
+  { value: 'INTRADAY',       label: 'Intraday Indices',     hint: 'NIFTY, BANKNIFTY, SENSEX futures' },
+  { value: 'NIFTY50',        label: 'NIFTY 50 stocks',     hint: '50 NSE equities' },
+  { value: 'SENSEX',         label: 'SENSEX 30',           hint: '30 BSE equities' },
+  { value: 'BANKNIFTY',      label: 'BANKNIFTY',           hint: '12 NSE bank stocks' },
+  { value: 'INDICES',        label: 'Major Indices',       hint: 'NIFTY/SENSEX index list' },
+  { value: 'ALL',            label: 'All of the above',    hint: '~110 instruments (slow)' },
 ]
 
 function MatchBar({ count, max }) {

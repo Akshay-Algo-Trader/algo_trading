@@ -32,12 +32,6 @@ def create_pattern():
         pattern_type=data['pattern_type'],
         direction=data['direction'],
         market=data.get('market'),
-        timeframes=data.get('timeframes'),
-        entry_conditions=data.get('entry_conditions'),
-        stop_loss_rules=data.get('stop_loss_rules'),
-        target_rules=data.get('target_rules'),
-        indicator_settings=data.get('indicator_settings'),
-        trade_filters=data.get('trade_filters'),
         created_by=int(get_jwt_identity()),
     )
     db.session.add(pattern)
@@ -58,9 +52,7 @@ def update_pattern(pattern_id):
     pattern = CandlePattern.query.get_or_404(pattern_id)
     data = request.get_json() or {}
 
-    for field in ['name', 'description', 'pattern_type', 'direction', 'market',
-                  'timeframes', 'entry_conditions', 'stop_loss_rules',
-                  'target_rules', 'indicator_settings', 'trade_filters', 'is_active']:
+    for field in ['name', 'description', 'pattern_type', 'direction', 'market', 'is_active']:
         if field in data:
             setattr(pattern, field, data[field])
 

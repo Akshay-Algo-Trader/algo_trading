@@ -29,6 +29,58 @@ logger = logging.getLogger(__name__)
 admin_backtest_bp = Blueprint('admin_backtest', __name__)
 
 
+def _last_thursday(date):
+    """Return the last Thursday on or before the given date."""
+    while date.weekday() != 3:  # 3 = Thursday
+        date -= timedelta(days=1)
+    return date
+
+
+def _option_expirations_last_3m():
+    """Generate all weekly option expiry dates from the last 3 months."""
+    now = datetime.now(_IST).date()
+    three_months_ago = now - timedelta(days=90)
+    expirations = []
+
+    # Get all Thursdays in the last 3 months (weekly expirations)
+    current = _last_thursday(now)
+    while current >= three_months_ago:
+        expirations.append(current)
+        current -= timedelta(days=7)
+
+    return sorted(expirations, reverse=True)  # Most recent first
+
+
+def _generate_option_symbols(underlying: str, expirations: list, strikes_range: int = 5) -> list[str]:
+    """Generate option symbols for an underlying across expirations.
+
+    Args:
+        underlying: Underlying symbol (e.g., 'APOLLOHOSP', 'NIFTY')
+        expirations: List of (date, atm_price) tuples for option expirations
+        strikes_range: Number of strikes above/below ATM to include
+
+    Returns:
+        List of option symbols like 'APOLLOHOSP25JUL7600CE'
+    """
+    symbols = []
+
+    for expiry_date, atm_price in expirations:
+        exp_str = expiry_date.strftime('%d%b').upper()
+
+        # Generate strikes around ATM (assuming 100-point intervals for stocks)
+        base_strike = int((atm_price // 100) * 100)
+        strike_interval = 50 if underlying in ['NIFTY', 'BANKNIFTY'] else 100
+
+        for strike_offset in range(-strikes_range, strikes_range + 1):
+            strike = base_strike + (strike_offset * strike_interval)
+            if strike > 0:
+                for option_type in ['CE', 'PE']:
+                    symbol = f"{underlying}{expiry_date.strftime('%d%b').upper()}{strike}{option_type}"
+                    symbols.append(symbol)
+
+    return symbols
+
+
 @admin_backtest_bp.post('/api/admin/backtest')
 @admin_required
 def run_admin_backtest():
@@ -160,12 +212,53 @@ def run_admin_backtest():
 # each instrument matched. The output is sorted by match count so the admin can
 # pick the best-fitting instrument for a given pattern.
 
-def _universe_symbols(universe: str) -> list[dict]:
-    """Resolve a universe key to a list of {symbol, exchange} dicts."""
+def _universe_symbols(universe: str, kite=None) -> list[dict]:
+    """Resolve a universe key to a list of {symbol, exchange} dicts.
+
+    Args:
+        universe: Universe key (INTRADAY, NIFTY50, OPTIONS_LAST3M, etc.)
+        kite: Optional KiteConnect instance for fetching prices (needed for options)
+    """
     from app.routes.customer.market import (
         _NIFTY50_SYMBOLS, _SENSEX_SYMBOLS, _BANKNIFTY_SYMBOLS, _INDICES_LIST,
     )
     u = (universe or '').upper().replace(' ', '')
+
+    if u == 'OPTIONS_LAST3M':
+        # Generate option symbols for major underlyings from last 3 months
+        expirations = _option_expirations_last_3m()
+        if not expirations or not kite:
+            return []
+
+        options = []
+        underlyings = [
+            ('NIFTY', 'NFO'), ('BANKNIFTY', 'NFO'),
+            ('APOLLOHOSP', 'NSE'), ('ADANIPORTS', 'NSE'), ('TCS', 'NSE'),
+        ]
+
+        for underlying, exchange in underlyings:
+            try:
+                # Get ATM price for each expiration
+                if exchange == 'NFO':
+                    key = f"{exchange}:{underlying}"
+                else:
+                    key = f"{exchange}:{underlying}"
+                ohlc_data = kite.ohlc([key])
+                atm = ohlc_data.get(key, {}).get('last_price', 0)
+                if atm <= 0:
+                    continue
+
+                # Generate option symbols
+                expiry_tuples = [(exp, atm) for exp in expirations]
+                symbols = _generate_option_symbols(underlying, expiry_tuples, strikes_range=3)
+                exchange_for_options = 'NFO' if exchange == 'NFO' else 'NFO'
+                for sym in symbols[:20]:  # Limit to 20 per underlying to avoid too many
+                    options.append({'symbol': sym, 'exchange': exchange_for_options})
+            except Exception as exc:
+                logger.warning(f"Failed to generate options for {underlying}: {exc}")
+
+        return options
+
     if u == 'INTRADAY' or u == 'INTRADAYINDICES':
         intraday_indices = [
             'NIFTY 50', 'NIFTY NEXT 50', 'NIFTY MIDCAP 50',
@@ -234,10 +327,6 @@ def run_pattern_scan():
     if not pattern:
         return jsonify({'error': 'Pattern not found'}), 404
 
-    universe = _universe_symbols(universe_key)
-    if not universe:
-        return jsonify({'error': f'Unknown universe: {universe_key!r}'}), 400
-
     config = KiteConfig.query.filter_by(user_id=user_id).first()
     if not (config and config.is_connected and config.access_token_encrypted):
         config = KiteConfig.query.filter_by(is_connected=True).first()
@@ -250,6 +339,11 @@ def run_pattern_scan():
 
         kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
         kite.set_access_token(decrypt(config.access_token_encrypted))
+
+        # For OPTIONS_LAST3M, we need kite to fetch current prices
+        universe = _universe_symbols(universe_key, kite=kite if universe_key == 'OPTIONS_LAST3M' else None)
+        if not universe:
+            return jsonify({'error': f'Unknown universe: {universe_key!r}'}), 400
 
         pattern_dict = pattern.to_dict()
         ind_cfg = pattern_dict.get('indicator_settings') if apply_filters else None

@@ -1,8 +1,11 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt_identity
+from datetime import timezone, timedelta
 from app.extensions import db
 from app.models import Strategy, UserStrategy, Exchange, OrderType, User
 from app.routes.decorators import admin_required
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 admin_strategies_bp = Blueprint('admin_strategies', __name__)
 
@@ -165,6 +168,65 @@ def get_instrument_price_admin():
         return jsonify({'symbol': symbol, 'exchange': exchange, 'ltp': None}), 200
 
 
+@admin_strategies_bp.get('/api/admin/candles')
+@admin_required
+def get_candles():
+    from datetime import datetime, timedelta
+    from app.routes.customer.market import _resolve_token
+    from app.services.encryption import decrypt
+    from app.models import KiteConfig
+
+    instrument = request.args.get('instrument', '').strip().upper()
+    exchange = request.args.get('exchange', 'NSE').upper()
+    timeframe = request.args.get('timeframe', '1H').upper()
+
+    if not instrument:
+        return jsonify({'error': 'instrument required'}), 400
+
+    # Map timeframe to Kite interval
+    tf_map = {
+        '1D': 'day', '4H': '60minute', '1H': '60minute',
+        '30M': '30minute', '15M': '15minute', '5M': '5minute', '3M': '3minute',
+    }
+    interval = tf_map.get(timeframe)
+    if not interval:
+        return jsonify({'error': f'Unsupported timeframe: {timeframe}'}), 400
+
+    try:
+        user_id = int(get_jwt_identity())
+        config = KiteConfig.query.filter_by(user_id=user_id).first()
+        if not (config and config.is_connected and config.access_token_encrypted):
+            config = KiteConfig.query.filter_by(is_connected=True).first()
+        if not (config and config.access_token_encrypted):
+            return jsonify({'error': 'No connected Kite account — cannot fetch chart data'}), 400
+
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
+        kite.set_access_token(decrypt(config.access_token_encrypted))
+
+        token = _resolve_token(instrument, exchange, kite)
+        if not token:
+            return jsonify({'error': f'{exchange}:{instrument} not found'}), 404
+
+        now_ist = datetime.now(_IST)
+        to_date = now_ist.date()
+        from_date = to_date - timedelta(days=14)
+
+        raw = kite.historical_data(token, from_date.strftime('%Y-%m-%d'), to_date.strftime('%Y-%m-%d'), interval)
+        candles = [{
+            'time': int(c['date'].timestamp()),
+            'open': c['open'],
+            'high': c['high'],
+            'low': c['low'],
+            'close': c['close'],
+            'volume': c['volume'],
+        } for c in raw]
+
+        return jsonify({'candles': candles}), 200
+    except Exception as e:
+        return jsonify({'error': f'Failed to fetch candles: {str(e)}'}), 500
+
+
 @admin_strategies_bp.get('/api/admin/strategies')
 @admin_required
 def list_strategies():
@@ -201,6 +263,10 @@ def create_strategy():
         take_profit_pct=float(data['take_profit_pct']),
         stop_loss_rules=data.get('stop_loss_rules'),
         target_rules=data.get('target_rules'),
+        timeframes=data.get('timeframes'),
+        entry_conditions=data.get('entry_conditions'),
+        indicator_settings=data.get('indicator_settings'),
+        trade_filters=data.get('trade_filters'),
         candle_pattern_id=data.get('candle_pattern_id'),
         option_config=data.get('option_config'),
         created_by=int(get_jwt_identity())
@@ -219,6 +285,7 @@ def update_strategy(strategy_id):
     scalar_fields = ['name', 'description', 'instrument', 'quantity',
                      'entry_condition', 'exit_condition', 'stop_loss_pct',
                      'take_profit_pct', 'stop_loss_rules', 'target_rules',
+                     'timeframes', 'entry_conditions', 'indicator_settings', 'trade_filters',
                      'candle_pattern_id', 'option_config', 'is_active']
     for field in scalar_fields:
         if field in data:

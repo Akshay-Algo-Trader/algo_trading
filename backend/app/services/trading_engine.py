@@ -289,13 +289,17 @@ class TradingEngine:
         self._target_rules    = _j(strategy.target_rules, {}) or {}
 
         pattern_obj = strategy.candle_pattern.to_dict() if strategy.candle_pattern else None
-        self._pattern = pattern_obj or {}
         self._direction = (pattern_obj or {}).get('direction') or 'bullish'
 
-        ind = self._pattern.get('indicator_settings') if pattern_obj else None
-        tf  = self._pattern.get('trade_filters')      if pattern_obj else None
+        # Config fields now live on strategy, not pattern
+        ind = _j(strategy.indicator_settings, {})
+        tf  = _j(strategy.trade_filters, {})
+        entry_conds = _j(strategy.entry_conditions, [])
+        # Merge entry_conditions into pattern dict so _check_pattern() still works
+        self._pattern = {**(pattern_obj or {}), 'entry_conditions': entry_conds}
+
         self._needs_candles = bool(
-            (pattern_obj and pattern_obj.get('entry_conditions'))
+            entry_conds
             or (ind and any((v or {}).get('enabled') for v in (ind.values() if isinstance(ind, dict) else [])))
             or (tf and (tf.get('trend_day_filter') or {}).get('enabled'))
             or self._stop_loss_rules.get('atr_multiplier')
@@ -557,7 +561,7 @@ class TradingEngine:
 
     def _eval_monitoring(self, ltp: float, prev_ltp: Optional[float]):
         strategy_entry = (self._strategy_dict or {}).get('entry_condition') or {}
-        pattern_filters = self._pattern.get('trade_filters') if self._pattern else None
+        pattern_filters = self._strategy_dict.get('trade_filters') if self._strategy_dict else None
         completed_today = self._completed_today()
 
         # ── Time-of-day & day-of-week (live-only filters) ────────────────────
@@ -578,7 +582,7 @@ class TradingEngine:
 
             if not self._pattern_detected and len(closed_candles) >= 2:
                 pattern_ok = _check_pattern(self._pattern, closed_candles)
-                indicators_ok = _check_indicators(self._pattern.get('indicator_settings'), closed_candles)
+                indicators_ok = _check_indicators(self._strategy_dict.get('indicator_settings'), closed_candles)
                 trend_ok = _check_trend_filter(pattern_filters, closed_candles)
                 if pattern_ok and indicators_ok and trend_ok:
                     self._pattern_detected = True
