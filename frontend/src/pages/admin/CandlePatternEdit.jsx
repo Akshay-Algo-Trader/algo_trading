@@ -17,6 +17,14 @@ const PATTERN_TYPES = [
 
 const DIRECTIONS = ['bullish', 'bearish']
 
+const CANDLE_FREQUENCIES = [
+  { value: 'day', label: 'Daily' },
+  { value: '240', label: '4 Hours' },
+  { value: '60', label: '1 Hour' },
+  { value: '15', label: '15 Minutes' },
+  { value: '5', label: '5 Minutes' },
+]
+
 export default function CandlePatternEdit() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -32,6 +40,7 @@ export default function CandlePatternEdit() {
     pattern_type: 'bullish_breakout',
     direction: 'bullish',
     market: '',
+    candle_frequency: 'day',
   })
 
   useEffect(() => {
@@ -46,6 +55,7 @@ export default function CandlePatternEdit() {
         pattern_type: pattern.pattern_type ?? 'bullish_breakout',
         direction:    pattern.direction ?? 'bullish',
         market:       pattern.market ?? '',
+        candle_frequency: pattern.candle_frequency ?? 'day',
       })
       setLoading(false)
     }).catch(() => { navigate('/admin/candle-patterns') })
@@ -62,6 +72,7 @@ export default function CandlePatternEdit() {
       pattern_type: form.pattern_type,
       direction: form.direction,
       market: form.market.trim(),
+      candle_frequency: form.candle_frequency,
     }
 
     axiosInstance.put(`/api/admin/candle-patterns/${id}`, data)
@@ -117,6 +128,17 @@ export default function CandlePatternEdit() {
               onChange={e => setForm({ ...form, market: e.target.value })}
               placeholder="e.g., Nifty, Sensex"
             />
+          </FormField>
+
+          <FormField label="Candle Frequency" required>
+            <Select
+              value={form.candle_frequency}
+              onChange={e => setForm({ ...form, candle_frequency: e.target.value })}
+            >
+              {CANDLE_FREQUENCIES.map(f => (
+                <option key={f.value} value={f.value}>{f.label}</option>
+              ))}
+            </Select>
           </FormField>
 
           <FormField label="Description">

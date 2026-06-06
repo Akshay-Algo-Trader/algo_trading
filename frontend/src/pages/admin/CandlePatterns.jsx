@@ -5,7 +5,6 @@ import {
   Card, Table, SkeletonTable, EmptyRow, ErrorRow, Badge,
   Modal, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
-import PatternScanPanel from '../../components/PatternScanPanel'
 
 const PATTERN_TYPES = [
   'bullish_breakout',
@@ -19,12 +18,20 @@ const PATTERN_TYPES = [
 
 const DIRECTIONS = ['bullish', 'bearish']
 
+const CANDLE_FREQUENCIES = [
+  { value: 'day', label: 'Daily' },
+  { value: '60', label: '1 Hour' },
+  { value: '15', label: '15 Minutes' },
+  { value: '5', label: '5 Minutes' },
+]
+
 const EMPTY_FORM = {
   name: '',
   description: '',
   pattern_type: 'bullish_breakout',
   direction: 'bullish',
   market: '',
+  candle_frequency: 'day',
 }
 
 function AddPatternModal({ isOpen, onClose, onSaved }) {
@@ -49,6 +56,7 @@ function AddPatternModal({ isOpen, onClose, onSaved }) {
       pattern_type: form.pattern_type,
       direction:   form.direction,
       market:      form.market.trim() || null,
+      candle_frequency: form.candle_frequency,
     }
 
     setSaving(true); setErr('')
@@ -88,6 +96,13 @@ function AddPatternModal({ isOpen, onClose, onSaved }) {
               ))}
             </Select>
           </FormField>
+          <FormField label="Candle Frequency" required>
+            <Select value={form.candle_frequency} onChange={set('candle_frequency')}>
+              {CANDLE_FREQUENCIES.map(f => (
+                <option key={f.value} value={f.value}>{f.label}</option>
+              ))}
+            </Select>
+          </FormField>
           <FormField label="Description" className="col-span-2">
             <textarea
               value={form.description}
@@ -115,7 +130,14 @@ const DIRECTION_BADGE = {
   bearish: 'bg-red-100 text-red-700',
 }
 
-const COLS = ['Name', 'Type', 'Direction', 'Market', 'Status', 'Actions']
+const COLS = ['Name', 'Type', 'Direction', 'Frequency', 'Market', 'Status', 'Actions']
+
+const FREQ_LABELS = {
+  'day': 'Daily',
+  '60': '1h',
+  '15': '15m',
+  '5': '5m',
+}
 
 export default function CandlePatterns() {
   const navigate = useNavigate()
@@ -125,7 +147,6 @@ export default function CandlePatterns() {
   const [addOpen, setAddOpen]   = useState(false)
   const [toggling, setToggling] = useState(null)
   const [deleting, setDeleting] = useState(null)
-  const [scanFor,  setScanFor]  = useState(null)
 
   const fetchData = useCallback(async () => {
     setLoading(true); setError(null)
@@ -169,9 +190,9 @@ export default function CandlePatterns() {
 
       <Card>
         <Table headers={COLS}>
-          {loading ? <SkeletonTable rows={4} cols={6} /> :
-           error   ? <ErrorRow message={error} onRetry={fetchData} cols={6} /> :
-           patterns.length === 0 ? <EmptyRow message="No candle patterns defined" cols={6} /> :
+          {loading ? <SkeletonTable rows={4} cols={7} /> :
+           error   ? <ErrorRow message={error} onRetry={fetchData} cols={7} /> :
+           patterns.length === 0 ? <EmptyRow message="No candle patterns defined" cols={7} /> :
            patterns.map(p => (
              <tr key={p.id} className="hover:bg-gray-50">
                <td className="px-4 py-3">
@@ -188,6 +209,9 @@ export default function CandlePatterns() {
                    {p.direction?.charAt(0).toUpperCase() + p.direction?.slice(1)}
                  </span>
                </td>
+               <td className="px-4 py-3">
+                 <Badge variant="gray">{FREQ_LABELS[p.candle_frequency] || p.candle_frequency}</Badge>
+               </td>
                <td className="px-4 py-3 text-sm text-gray-700">{p.market || '—'}</td>
                <td className="px-4 py-3">
                  <button
@@ -200,7 +224,6 @@ export default function CandlePatterns() {
                </td>
                <td className="px-4 py-3">
                  <div className="flex items-center gap-2">
-                   <Btn size="sm" variant="ghost" onClick={() => setScanFor(p)}>Scan</Btn>
                    <Btn size="sm" variant="ghost" onClick={() => navigate(`/admin/candle-patterns/${p.id}/edit`)}>
                      Edit
                    </Btn>
@@ -220,17 +243,6 @@ export default function CandlePatterns() {
         onClose={() => setAddOpen(false)}
         onSaved={fetchData}
       />
-
-      <Modal
-        isOpen={Boolean(scanFor)}
-        onClose={() => setScanFor(null)}
-        title={`Pattern Scan — ${scanFor?.name || ''}`}
-        size="6xl"
-      >
-        {scanFor && (
-          <PatternScanPanel lockedPattern={scanFor} />
-        )}
-      </Modal>
     </div>
   )
 }

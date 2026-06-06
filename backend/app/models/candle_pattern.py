@@ -12,6 +12,7 @@ class CandlePattern(db.Model):
     pattern_type = db.Column(db.String(50), nullable=False)  # bullish_breakout, bearish_breakout, etc.
     direction = db.Column(db.String(10), nullable=False, default='bullish')  # bullish / bearish
     market = db.Column(db.String(100), nullable=True)
+    candle_frequency = db.Column(db.String(20), nullable=False, default='day', server_default='day')  # day, 60, 15, 5, 240, etc. (in minutes)
     entry_conditions = db.Column(JSON, nullable=True)  # Candle pattern matching conditions
     indicator_settings = db.Column(JSON, nullable=True)  # Indicator filters (RSI, MACD, etc.)
     trade_filters = db.Column(JSON, nullable=True)  # Trade filters (trend, day-of-week, etc.)
@@ -29,6 +30,7 @@ class CandlePattern(db.Model):
             'pattern_type': self.pattern_type,
             'direction': self.direction,
             'market': self.market,
+            'candle_frequency': self.candle_frequency,
             'entry_conditions': self.entry_conditions,
             'indicator_settings': self.indicator_settings,
             'trade_filters': self.trade_filters,

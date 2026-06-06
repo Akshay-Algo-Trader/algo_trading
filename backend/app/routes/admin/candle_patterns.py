@@ -32,6 +32,7 @@ def create_pattern():
         pattern_type=data['pattern_type'],
         direction=data['direction'],
         market=data.get('market'),
+        candle_frequency=data.get('candle_frequency', 'day'),
         created_by=int(get_jwt_identity()),
     )
     db.session.add(pattern)
@@ -52,7 +53,7 @@ def update_pattern(pattern_id):
     pattern = CandlePattern.query.get_or_404(pattern_id)
     data = request.get_json() or {}
 
-    for field in ['name', 'description', 'pattern_type', 'direction', 'market', 'is_active']:
+    for field in ['name', 'description', 'pattern_type', 'direction', 'market', 'candle_frequency', 'is_active']:
         if field in data:
             setattr(pattern, field, data[field])
 
