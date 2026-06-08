@@ -231,7 +231,8 @@ export default function ZoneScan() {
                 <thead>
                   <tr className="border-b border-gray-200">
                     <th className="text-left px-4 py-2 text-xs font-semibold text-gray-700">Type</th>
-                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-700">Date Identified</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-700">Zone Start</th>
+                    <th className="text-left px-4 py-2 text-xs font-semibold text-gray-700">Zone End</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-gray-700">High</th>
                     <th className="text-right px-4 py-2 text-xs font-semibold text-gray-700">Low</th>
                     <th className="text-left px-4 py-2 text-xs font-semibold text-gray-700">Details</th>
@@ -246,7 +247,10 @@ export default function ZoneScan() {
                         </Badge>
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-900 font-medium">
-                        {zone.date}
+                        {zone.start_date}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-900 font-medium">
+                        {zone.end_date}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-900 text-right">
                         {zone.high?.toFixed(2)}

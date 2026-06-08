@@ -29,7 +29,8 @@ def _calc_fvg_zones(candles, settings):
             if min_gap_pct <= gap_pct <= max_gap_pct:
                 zones.append({
                     'type': 'FVG_BULLISH',
-                    'date': curr_candle['date'],
+                    'start_date': prev_candle['date'],
+                    'end_date': curr_candle['date'],
                     'high': curr_candle['low'],
                     'low': prev_candle['high'],
                     'gap_pct': round(gap_pct, 2),
@@ -42,7 +43,8 @@ def _calc_fvg_zones(candles, settings):
             if min_gap_pct <= gap_pct <= max_gap_pct:
                 zones.append({
                     'type': 'FVG_BEARISH',
-                    'date': curr_candle['date'],
+                    'start_date': prev_candle['date'],
+                    'end_date': curr_candle['date'],
                     'high': prev_candle['low'],
                     'low': curr_candle['high'],
                     'gap_pct': round(gap_pct, 2),
@@ -100,14 +102,18 @@ def _calc_sr_zones(candles, settings):
             zone_h = avg_price * (1 + zone_width / 100)
             zone_l = avg_price * (1 - zone_width / 100)
 
+            # Sort touches by date to get first and last touch
+            touches_sorted = sorted(touches, key=lambda x: x[0])
+
             zones.append({
                 'type': 'SR',
-                'date': touches[-1][0],
+                'start_date': touches_sorted[0][0],
+                'end_date': touches_sorted[-1][0],
                 'high': round(zone_h, 2),
                 'low': round(zone_l, 2),
                 'touches': len(touches),
                 'avg_price': round(avg_price, 2),
-                'detected_at_index': touches[-1][1],
+                'detected_at_index': touches_sorted[-1][1],
             })
 
     return zones
@@ -137,9 +143,12 @@ def _calc_swing_zones(candles, settings):
         right = candles[i + 1:i + 1 + right_bars]
 
         if all(curr['high'] >= c['high'] for c in left) and all(curr['high'] >= c['high'] for c in right):
+            start_date = left[0]['date'] if left else curr['date']
+            end_date = right[-1]['date'] if right else curr['date']
             zones.append({
                 'type': 'SWING_HIGH',
-                'date': curr['date'],
+                'start_date': start_date,
+                'end_date': end_date,
                 'high': round(curr['high'], 2),
                 'low': round(curr['high'] * (1 - min_swing_pct / 100), 2),
                 'detected_at_index': i,
@@ -152,9 +161,12 @@ def _calc_swing_zones(candles, settings):
         right = candles[i + 1:i + 1 + right_bars]
 
         if all(curr['low'] <= c['low'] for c in left) and all(curr['low'] <= c['low'] for c in right):
+            start_date = left[0]['date'] if left else curr['date']
+            end_date = right[-1]['date'] if right else curr['date']
             zones.append({
                 'type': 'SWING_LOW',
-                'date': curr['date'],
+                'start_date': start_date,
+                'end_date': end_date,
                 'high': round(curr['low'] * (1 + min_swing_pct / 100), 2),
                 'low': round(curr['low'], 2),
                 'detected_at_index': i,
