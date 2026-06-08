@@ -143,11 +143,24 @@ def scan_zones(zone_id):
             return jsonify({'error': 'Not enough historical data for this instrument'}), 400
 
         zone_dict = zone_config.to_dict()
-        sim_candles = all_candles[-(scan_days + 120):]
 
-        detected_zones = detect_zones(sim_candles, zone_dict)
+        # Use all available candles for zone detection (includes warmup period)
+        detected_zones = detect_zones(all_candles, zone_dict)
 
-        report_candles = sim_candles[-scan_days:]
+        # Filter results to only last N working days
+        if len(all_candles) >= scan_days:
+            # Get the last N trading days (not calendar days)
+            report_candles = all_candles[-scan_days:]
+        else:
+            report_candles = all_candles
+
+        # Filter detected zones to only those in the report period
+        if report_candles:
+            report_start_date = report_candles[0]['date']
+            filtered_zones = [z for z in detected_zones if z.get('date', '') >= report_start_date]
+        else:
+            filtered_zones = detected_zones
+
         period_from = report_candles[0]['date'] if report_candles else from_date.strftime('%Y-%m-%d')
         period_to = report_candles[-1]['date'] if report_candles else to_date.strftime('%Y-%m-%d')
 
@@ -159,15 +172,15 @@ def scan_zones(zone_id):
             scan_days=scan_days,
             period_from=period_from,
             period_to=period_to,
-            zones_detected=detected_zones,
-            total_zones=len(detected_zones),
+            zones_detected=filtered_zones,
+            total_zones=len(filtered_zones),
             scanned_by=user_id,
         )
         db.session.add(result)
         db.session.commit()
 
         zone_type_counts = {}
-        for zone in detected_zones:
+        for zone in filtered_zones:
             zone_type = zone.get('type', 'UNKNOWN')
             zone_type_counts[zone_type] = zone_type_counts.get(zone_type, 0) + 1
 
@@ -175,7 +188,7 @@ def scan_zones(zone_id):
             'zone_config': zone_dict,
             'scan_result': result.to_dict(),
             'summary': {
-                'total_zones_detected': len(detected_zones),
+                'total_zones_detected': len(filtered_zones),
                 'zone_breakdown': zone_type_counts,
                 'period': {'from': period_from, 'to': period_to, 'days': scan_days},
             },
