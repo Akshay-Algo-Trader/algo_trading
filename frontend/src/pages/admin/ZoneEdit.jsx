@@ -67,18 +67,30 @@ function FvgTimeframeRow({ tf, settings, onChange }) {
       </div>
       {settings.enabled && (
         <div className="grid grid-cols-2 gap-3 mt-3 pl-11">
-          <FormField label="Lookback Candles">
-            <Input type="number" value={settings.lookback_candles} onChange={e => patch('lookback_candles', parseInt(e.target.value))} min={10} />
-          </FormField>
-          <FormField label="Min Gap %">
-            <Input type="number" value={settings.min_gap_pct} onChange={e => patch('min_gap_pct', parseFloat(e.target.value))} step={0.01} min={0} />
-          </FormField>
-          <FormField label="Max Gap %">
-            <Input type="number" value={settings.max_gap_pct} onChange={e => patch('max_gap_pct', parseFloat(e.target.value))} step={0.01} min={0} />
-          </FormField>
-          <FormField label="Gap Fill Tolerance %">
-            <Input type="number" value={settings.gap_fill_tolerance_pct} onChange={e => patch('gap_fill_tolerance_pct', parseFloat(e.target.value))} step={0.01} min={0} />
-          </FormField>
+          <div>
+            <FormField label="Lookback Candles">
+              <Input type="number" value={settings.lookback_candles} onChange={e => patch('lookback_candles', parseInt(e.target.value))} min={10} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Historical candles to analyze. Higher = broader detection</p>
+          </div>
+          <div>
+            <FormField label="Min Gap %">
+              <Input type="number" value={settings.min_gap_pct} onChange={e => patch('min_gap_pct', parseFloat(e.target.value))} step={0.01} min={0} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Minimum gap size. Filters tiny gaps</p>
+          </div>
+          <div>
+            <FormField label="Max Gap %">
+              <Input type="number" value={settings.max_gap_pct} onChange={e => patch('max_gap_pct', parseFloat(e.target.value))} step={0.01} min={0} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Maximum gap size. Filters anomalies</p>
+          </div>
+          <div>
+            <FormField label="Gap Fill Tolerance %">
+              <Input type="number" value={settings.gap_fill_tolerance_pct} onChange={e => patch('gap_fill_tolerance_pct', parseFloat(e.target.value))} step={0.01} min={0} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Tolerance when measuring gap fill</p>
+          </div>
         </div>
       )}
     </div>
@@ -216,6 +228,7 @@ export default function ZoneEdit() {
           <h3 className="font-semibold text-gray-800">General</h3>
           <FormField label="Config Name" required>
             <Input value={form.name} onChange={set('name')} />
+            <p className="text-xs text-gray-500 mt-1">Identifier for this zone configuration. Example: "FVG Config", "NIFTY Zone Setup"</p>
           </FormField>
           <FormField label="Description">
             <textarea
@@ -225,6 +238,7 @@ export default function ZoneEdit() {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-[#eb5202]"
               rows={2}
             />
+            <p className="text-xs text-gray-500 mt-1">Document the purpose and strategy. Example: "Detects FVGs on 1H/4H for intraday breakouts"</p>
           </FormField>
         </div>
       </Card>
@@ -248,18 +262,30 @@ export default function ZoneEdit() {
       <Card>
         <div className="space-y-3">
           <h3 className="font-semibold text-gray-800">Support & Resistance (4H)</h3>
-          <FormField label="Lookback Candles">
-            <Input type="number" value={form.sr_settings.lookback_candles} onChange={e => setSrField('lookback_candles', parseInt(e.target.value))} min={10} />
-          </FormField>
-          <FormField label="Min Touch Count">
-            <Input type="number" value={form.sr_settings.touch_count_min} onChange={e => setSrField('touch_count_min', parseInt(e.target.value))} min={1} />
-          </FormField>
-          <FormField label="Price Tolerance %">
-            <Input type="number" value={form.sr_settings.price_tolerance_pct} onChange={e => setSrField('price_tolerance_pct', parseFloat(e.target.value))} step={0.01} min={0} />
-          </FormField>
-          <FormField label="Zone Width %">
-            <Input type="number" value={form.sr_settings.zone_width_pct} onChange={e => setSrField('zone_width_pct', parseFloat(e.target.value))} step={0.01} min={0} />
-          </FormField>
+          <div>
+            <FormField label="Lookback Candles">
+              <Input type="number" value={form.sr_settings.lookback_candles} onChange={e => setSrField('lookback_candles', parseInt(e.target.value))} min={10} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">How many candles back to analyze. Higher = finds older, stronger levels</p>
+          </div>
+          <div>
+            <FormField label="Min Touch Count">
+              <Input type="number" value={form.sr_settings.touch_count_min} onChange={e => setSrField('touch_count_min', parseInt(e.target.value))} min={1} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Minimum times price must touch a level to be considered S&R. Higher = stronger level</p>
+          </div>
+          <div>
+            <FormField label="Price Tolerance %">
+              <Input type="number" value={form.sr_settings.price_tolerance_pct} onChange={e => setSrField('price_tolerance_pct', parseFloat(e.target.value))} step={0.01} min={0} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Range around level where touches are counted as same level. Example: 0.25% on 10,000 = 9,975-10,025</p>
+          </div>
+          <div>
+            <FormField label="Zone Width %">
+              <Input type="number" value={form.sr_settings.zone_width_pct} onChange={e => setSrField('zone_width_pct', parseFloat(e.target.value))} step={0.01} min={0} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Creates a zone around the identified level. Higher = wider zone</p>
+          </div>
         </div>
       </Card>
 
@@ -267,18 +293,30 @@ export default function ZoneEdit() {
       <Card>
         <div className="space-y-3">
           <h3 className="font-semibold text-gray-800">Swing High / Swing Low (4H)</h3>
-          <FormField label="Lookback Candles">
-            <Input type="number" value={form.swing_settings.lookback_candles} onChange={e => setSwingField('lookback_candles', parseInt(e.target.value))} min={10} />
-          </FormField>
-          <FormField label="Left Bars">
-            <Input type="number" value={form.swing_settings.swing_left_bars} onChange={e => setSwingField('swing_left_bars', parseInt(e.target.value))} min={1} />
-          </FormField>
-          <FormField label="Right Bars">
-            <Input type="number" value={form.swing_settings.swing_right_bars} onChange={e => setSwingField('swing_right_bars', parseInt(e.target.value))} min={1} />
-          </FormField>
-          <FormField label="Min Swing %">
-            <Input type="number" value={form.swing_settings.min_swing_pct} onChange={e => setSwingField('min_swing_pct', parseFloat(e.target.value))} step={0.01} min={0} />
-          </FormField>
+          <div>
+            <FormField label="Lookback Candles">
+              <Input type="number" value={form.swing_settings.lookback_candles} onChange={e => setSwingField('lookback_candles', parseInt(e.target.value))} min={10} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Historical candles to analyze for swing patterns</p>
+          </div>
+          <div>
+            <FormField label="Left Bars">
+              <Input type="number" value={form.swing_settings.swing_left_bars} onChange={e => setSwingField('swing_left_bars', parseInt(e.target.value))} min={1} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Number of candles to left that must be lower (swing high) or higher (swing low). Higher = stricter pattern</p>
+          </div>
+          <div>
+            <FormField label="Right Bars">
+              <Input type="number" value={form.swing_settings.swing_right_bars} onChange={e => setSwingField('swing_right_bars', parseInt(e.target.value))} min={1} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Number of candles to right that must be lower/higher. Higher = stricter pattern</p>
+          </div>
+          <div>
+            <FormField label="Min Swing %">
+              <Input type="number" value={form.swing_settings.min_swing_pct} onChange={e => setSwingField('min_swing_pct', parseFloat(e.target.value))} step={0.01} min={0} />
+            </FormField>
+            <p className="text-xs text-gray-500 mt-1">Minimum price movement for valid swing. Filters tiny swings, keeps significant ones</p>
+          </div>
         </div>
       </Card>
 
@@ -290,44 +328,65 @@ export default function ZoneEdit() {
               on={form.confluence_settings.enabled}
               onToggle={() => setConfluenceField('enabled', !form.confluence_settings.enabled)}
             />
-            <h3 className="font-semibold text-gray-800">FVG Confluence Zone</h3>
+            <div>
+              <h3 className="font-semibold text-gray-800">FVG Confluence Zone</h3>
+              <p className="text-xs text-gray-500 mt-1">Detect zones where FVGs overlap across multiple timeframes (stronger signals)</p>
+            </div>
           </div>
 
           {form.confluence_settings.enabled && (
             <div className="space-y-3">
-              <FormField label="Timeframes">
-                <TimeframeMultiSelect
-                  selected={form.confluence_settings.timeframes}
-                  onChange={tf => setConfluenceField('timeframes', tf)}
-                  available={['1H', '30M', '15M']}
-                />
-              </FormField>
-              <FormField label="Min Overlap %">
-                <Input
-                  type="number"
-                  value={form.confluence_settings.overlap_min_pct}
-                  onChange={e => setConfluenceField('overlap_min_pct', parseFloat(e.target.value))}
-                  step={0.01}
-                  min={0}
-                  max={1}
-                />
-              </FormField>
-              <FormField label="Max Overlap %">
-                <Input
-                  type="number"
-                  value={form.confluence_settings.overlap_max_pct}
-                  onChange={e => setConfluenceField('overlap_max_pct', parseFloat(e.target.value))}
-                  step={0.01}
-                  min={0}
-                  max={1}
-                />
-              </FormField>
-              <div className="flex items-center gap-3">
-                <Toggle
-                  on={form.confluence_settings.require_all_timeframes}
-                  onToggle={() => setConfluenceField('require_all_timeframes', !form.confluence_settings.require_all_timeframes)}
-                />
-                <span className="text-sm text-gray-700">Require All Timeframes</span>
+              <div>
+                <FormField label="Timeframes">
+                  <TimeframeMultiSelect
+                    selected={form.confluence_settings.timeframes}
+                    onChange={tf => setConfluenceField('timeframes', tf)}
+                    available={['1H', '30M', '15M']}
+                  />
+                </FormField>
+                <p className="text-xs text-gray-500 mt-1">Select which timeframes to check for overlaps. Click to toggle</p>
+              </div>
+              <div>
+                <FormField label="Min Overlap %">
+                  <Input
+                    type="number"
+                    value={form.confluence_settings.overlap_min_pct}
+                    onChange={e => setConfluenceField('overlap_min_pct', parseFloat(e.target.value))}
+                    step={0.01}
+                    min={0}
+                    max={1}
+                  />
+                </FormField>
+                <p className="text-xs text-gray-500 mt-1">Minimum overlap for confluence. Example: 0.03 = at least 3% overlap required</p>
+              </div>
+              <div>
+                <FormField label="Max Overlap %">
+                  <Input
+                    type="number"
+                    value={form.confluence_settings.overlap_max_pct}
+                    onChange={e => setConfluenceField('overlap_max_pct', parseFloat(e.target.value))}
+                    step={0.01}
+                    min={0}
+                    max={1}
+                  />
+                </FormField>
+                <p className="text-xs text-gray-500 mt-1">Maximum overlap allowed. Prevents counting zones too far apart</p>
+              </div>
+              <div className="flex items-start gap-3">
+                <div className="pt-2">
+                  <Toggle
+                    on={form.confluence_settings.require_all_timeframes}
+                    onToggle={() => setConfluenceField('require_all_timeframes', !form.confluence_settings.require_all_timeframes)}
+                  />
+                </div>
+                <div>
+                  <span className="text-sm font-medium text-gray-700">Require All Timeframes</span>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {form.confluence_settings.require_all_timeframes
+                      ? 'ON: ALL selected timeframes must have FVG overlap'
+                      : 'OFF: ANY timeframe with FVG overlap counts'}
+                  </p>
+                </div>
               </div>
             </div>
           )}
