@@ -10,6 +10,10 @@ import Strategies      from './pages/admin/Strategies'
 import StrategyEdit    from './pages/admin/StrategyEdit'
 import CandlePatterns     from './pages/admin/CandlePatterns'
 import CandlePatternEdit  from './pages/admin/CandlePatternEdit'
+import Zones           from './pages/admin/Zones'
+import ZoneEdit        from './pages/admin/ZoneEdit'
+import ZoneScan        from './pages/admin/ZoneScan'
+import ZoneScanDetail  from './pages/admin/ZoneScanDetail'
 import KiteConfig  from './pages/admin/KiteConfig'
 import Sessions    from './pages/admin/Sessions'
 import Orders      from './pages/admin/Orders'
@@ -58,6 +62,10 @@ export default function App() {
           <Route path="strategies/:id/edit" element={<StrategyEdit />} />
           <Route path="candle-patterns"              element={<CandlePatterns />} />
           <Route path="candle-patterns/:id/edit"   element={<CandlePatternEdit />} />
+          <Route path="zones"                     element={<Zones />} />
+          <Route path="zones/:id/edit"           element={<ZoneEdit />} />
+          <Route path="zones/:id/scan"           element={<ZoneScan />} />
+          <Route path="zones/:id/scan/:resultId" element={<ZoneScanDetail />} />
           <Route path="kite-config" element={<KiteConfig />} />
           <Route path="backtest"    element={<AdminBacktest />} />
           <Route path="sessions"    element={<Sessions />} />
