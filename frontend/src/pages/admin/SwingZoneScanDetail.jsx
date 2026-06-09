@@ -113,7 +113,7 @@ export default function SwingZoneScanDetail() {
                 {resistance.map((l, i) => (
                   <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded bg-red-50 border border-red-100">
                     <span className="text-sm font-semibold text-red-700">{l.price}</span>
-                    <span className="text-xs text-gray-500">{String(l.date).slice(0, 10)}</span>
+                    <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
                   </div>
                 ))}
               </div>
@@ -127,7 +127,7 @@ export default function SwingZoneScanDetail() {
                 {support.map((l, i) => (
                   <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded bg-green-50 border border-green-100">
                     <span className="text-sm font-semibold text-green-700">{l.price}</span>
-                    <span className="text-xs text-gray-500">{String(l.date).slice(0, 10)}</span>
+                    <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
                   </div>
                 ))}
               </div>

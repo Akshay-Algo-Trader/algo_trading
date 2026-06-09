@@ -160,6 +160,13 @@ def scan_swing_zones(config_id):
         period_from = report_candles[0]['date'] if report_candles else from_date.strftime('%Y-%m-%d')
         period_to = report_candles[-1]['date'] if report_candles else to_date.strftime('%Y-%m-%d')
 
+        # Trim history to last 19 before inserting so total stays at 20
+        existing = SwingZoneScanResult.query.filter_by(swing_config_id=config_id)\
+            .order_by(SwingZoneScanResult.scanned_at.asc()).all()
+        if len(existing) >= 20:
+            for old in existing[:len(existing) - 19]:
+                db.session.delete(old)
+
         result = SwingZoneScanResult(
             swing_config_id=config_id,
             instrument=instrument,
@@ -200,7 +207,7 @@ def get_swing_scan_history(config_id):
     SwingZoneConfig.query.get_or_404(config_id)
     results = SwingZoneScanResult.query.filter_by(swing_config_id=config_id).order_by(
         SwingZoneScanResult.scanned_at.desc()
-    ).limit(50).all()
+    ).limit(20).all()
     return jsonify({'scan_results': [r.to_dict() for r in results]}), 200
 
 

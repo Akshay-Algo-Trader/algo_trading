@@ -64,26 +64,82 @@ NIFTY50_FALLBACK = [
 
 
 INDICES_FALLBACK = [
-    {"symbol": "NIFTY 50",        "name": "NIFTY 50",              "exchange": "NSE"},
-    {"symbol": "NIFTY BANK",      "name": "Nifty Bank",            "exchange": "NSE"},
-    {"symbol": "NIFTY IT",        "name": "Nifty IT",              "exchange": "NSE"},
-    {"symbol": "NIFTY MIDCAP 150","name": "Nifty Midcap 150",      "exchange": "NSE"},
-    {"symbol": "NIFTY NEXT 50",   "name": "Nifty Next 50",         "exchange": "NSE"},
-    {"symbol": "NIFTY 100",       "name": "Nifty 100",             "exchange": "NSE"},
-    {"symbol": "NIFTY 200",       "name": "Nifty 200",             "exchange": "NSE"},
-    {"symbol": "NIFTY 500",       "name": "Nifty 500",             "exchange": "NSE"},
-    {"symbol": "NIFTY AUTO",      "name": "Nifty Auto",            "exchange": "NSE"},
-    {"symbol": "NIFTY FMCG",      "name": "Nifty FMCG",           "exchange": "NSE"},
-    {"symbol": "NIFTY PHARMA",    "name": "Nifty Pharma",          "exchange": "NSE"},
-    {"symbol": "NIFTY METAL",     "name": "Nifty Metal",           "exchange": "NSE"},
-    {"symbol": "NIFTY REALTY",    "name": "Nifty Realty",          "exchange": "NSE"},
-    {"symbol": "NIFTY ENERGY",    "name": "Nifty Energy",          "exchange": "NSE"},
-    {"symbol": "NIFTY INFRA",     "name": "Nifty Infrastructure",  "exchange": "NSE"},
-    {"symbol": "NIFTY MEDIA",     "name": "Nifty Media",           "exchange": "NSE"},
+    {"symbol": "NIFTY 50",        "name": "NIFTY 50",              "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY BANK",      "name": "Nifty Bank",            "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY IT",        "name": "Nifty IT",              "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY MIDCAP 150","name": "Nifty Midcap 150",      "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY NEXT 50",   "name": "Nifty Next 50",         "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY 100",       "name": "Nifty 100",             "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY 200",       "name": "Nifty 200",             "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY 500",       "name": "Nifty 500",             "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY AUTO",      "name": "Nifty Auto",            "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY FMCG",      "name": "Nifty FMCG",           "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY PHARMA",    "name": "Nifty Pharma",          "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY METAL",     "name": "Nifty Metal",           "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY REALTY",    "name": "Nifty Realty",          "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY ENERGY",    "name": "Nifty Energy",          "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY INFRA",     "name": "Nifty Infrastructure",  "exchange": "NSE_INDICES"},
+    {"symbol": "NIFTY MEDIA",     "name": "Nifty Media",           "exchange": "NSE_INDICES"},
     {"symbol": "SENSEX",          "name": "BSE SENSEX",            "exchange": "BSE"},
     {"symbol": "BANKEX",          "name": "BSE Bankex",            "exchange": "BSE"},
     {"symbol": "BSE500",          "name": "BSE 500",               "exchange": "BSE"},
 ]
+
+
+@admin_strategies_bp.post('/api/admin/instruments/sync')
+@admin_required
+def sync_instruments():
+    from app.models import KiteConfig
+    from app.services.kite_service import kite_service
+    from app.services.encryption import decrypt
+    from app.models.instrument import Instrument
+    user_id = int(get_jwt_identity())
+
+    kite_cfg = KiteConfig.query.filter_by(user_id=user_id).first()
+    if not (kite_cfg and kite_cfg.is_connected and kite_cfg.access_token_encrypted):
+        kite_cfg = KiteConfig.query.filter_by(is_connected=True).first()
+    if not (kite_cfg and kite_cfg.access_token_encrypted):
+        return jsonify({'error': 'No connected Kite account available'}), 400
+
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=decrypt(kite_cfg.api_key_encrypted))
+        kite.set_access_token(decrypt(kite_cfg.access_token_encrypted))
+
+        total = 0
+        for exchange in ['NSE', 'BSE', 'NFO', 'NSE_INDICES']:
+            try:
+                records = kite.instruments(exchange)
+            except Exception as exc:
+                continue
+            for r in records:
+                existing = Instrument.query.filter_by(
+                    instrument_token=r['instrument_token'], exchange=exchange
+                ).first()
+                if existing:
+                    existing.tradingsymbol = r.get('tradingsymbol', '')
+                    existing.name = r.get('name', '')
+                    existing.instrument_type = r.get('instrument_type', '')
+                    existing.segment = r.get('segment', '')
+                    existing.lot_size = r.get('lot_size')
+                    existing.tick_size = r.get('tick_size')
+                else:
+                    db.session.add(Instrument(
+                        instrument_token=r['instrument_token'],
+                        tradingsymbol=r.get('tradingsymbol', ''),
+                        exchange=exchange,
+                        name=r.get('name', ''),
+                        instrument_type=r.get('instrument_type', ''),
+                        segment=r.get('segment', ''),
+                        lot_size=r.get('lot_size'),
+                        tick_size=r.get('tick_size'),
+                    ))
+                total += 1
+            db.session.commit()
+
+        return jsonify({'message': f'Synced {total} instruments', 'total': total}), 200
+    except Exception as exc:
+        return jsonify({'error': str(exc)}), 500
 
 
 @admin_strategies_bp.get('/api/admin/instruments')
@@ -97,13 +153,25 @@ def list_instruments():
     SEARCH_EXCHANGES = ['NSE', 'BSE', 'NFO', 'NSE_INDICES', 'BSE_INDICES', 'MCX']
     base = Instrument.query.filter(Instrument.exchange.in_(SEARCH_EXCHANGES))
     if q:
+        from sqlalchemy import func, case
+        q_nospace = q.replace(' ', '')
         base = base.filter(
             or_(
                 Instrument.tradingsymbol.ilike(f'%{q}%'),
                 Instrument.name.ilike(f'%{q}%'),
+                func.replace(Instrument.tradingsymbol, ' ', '').ilike(f'%{q_nospace}%'),
             )
         )
-    instruments = base.order_by(Instrument.tradingsymbol).limit(50).all()
+        # Indices first, then exact symbol match, then starts-with, then rest
+        priority = case(
+            (Instrument.exchange.in_(['NSE_INDICES', 'BSE_INDICES']), 0),
+            (func.replace(Instrument.tradingsymbol, ' ', '').ilike(q_nospace), 1),
+            (func.replace(Instrument.tradingsymbol, ' ', '').ilike(f'{q_nospace}%'), 2),
+            else_=3
+        )
+        instruments = base.order_by(priority, Instrument.tradingsymbol).limit(50).all()
+    else:
+        instruments = base.order_by(Instrument.tradingsymbol).limit(50).all()
 
     if instruments:
         return jsonify({'instruments': [
@@ -134,9 +202,13 @@ def list_instruments():
 
     combined = INDICES_FALLBACK + [{**i, 'exchange': 'NSE'} for i in NIFTY50_FALLBACK] + mcx_fallback
     q_lower = q.lower()
+    q_nospace = q_lower.replace(' ', '')
     filtered = [
         i for i in combined
-        if not q or q_lower in i['symbol'].lower() or q_lower in i['name'].lower()
+        if not q
+        or q_lower in i['symbol'].lower()
+        or q_lower in i['name'].lower()
+        or q_nospace in i['symbol'].lower().replace(' ', '')
     ]
     return jsonify({'instruments': filtered}), 200
 

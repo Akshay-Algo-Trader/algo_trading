@@ -19,8 +19,8 @@ import FvgZoneEdit     from './pages/admin/FvgZoneEdit'
 import FvgZoneScan     from './pages/admin/FvgZoneScan'
 import FvgZoneScanDetail from './pages/admin/FvgZoneScanDetail'
 import SwingZones        from './pages/admin/SwingZones'
+import SwingZoneNew      from './pages/admin/SwingZoneNew'
 import SwingZoneEdit     from './pages/admin/SwingZoneEdit'
-import SwingZoneScan     from './pages/admin/SwingZoneScan'
 import SwingZoneScanDetail from './pages/admin/SwingZoneScanDetail'
 import KiteConfig  from './pages/admin/KiteConfig'
 import Sessions    from './pages/admin/Sessions'
@@ -79,8 +79,8 @@ export default function App() {
           <Route path="fvg-zones/:id/scan"              element={<FvgZoneScan />} />
           <Route path="fvg-zones/:id/scan/:resultId"    element={<FvgZoneScanDetail />} />
           <Route path="swing-zones"                        element={<SwingZones />} />
+          <Route path="swing-zones/new"                   element={<SwingZoneNew />} />
           <Route path="swing-zones/:id/edit"              element={<SwingZoneEdit />} />
-          <Route path="swing-zones/:id/scan"              element={<SwingZoneScan />} />
           <Route path="swing-zones/:id/scan/:resultId"    element={<SwingZoneScanDetail />} />
           <Route path="kite-config" element={<KiteConfig />} />
           <Route path="backtest"    element={<AdminBacktest />} />
