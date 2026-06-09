@@ -128,7 +128,7 @@ def _check_candle_condition(cond, candles):
 def _check_pattern(pattern, candles):
     conds = _j((pattern or {}).get('entry_conditions', []), [])
     if not isinstance(conds, list) or not conds:
-        return True
+        return False
     return all(_check_candle_condition(c, candles) for c in conds)
 
 
@@ -568,8 +568,10 @@ def _summarize_fills(fills, entry_price, direction):
 def _simulate(strategy_dict, all_candles):
     pattern   = _j(strategy_dict.get('candle_pattern'), {}) or {}
     direction = pattern.get('direction', 'bullish')
-    ind_cfg   = _j(pattern.get('indicator_settings'), {})
-    trade_cfg = _j(pattern.get('trade_filters'), {})
+    ind_cfg   = _j(strategy_dict.get('indicator_settings'), {})
+    trade_cfg = _j(strategy_dict.get('trade_filters'), {})
+    # Merge entry_conditions into pattern dict for _check_pattern() compat
+    pattern   = {**pattern, 'entry_conditions': _j(strategy_dict.get('entry_conditions'), [])}
     warmup    = _required_warmup(ind_cfg, trade_cfg)
     quantity  = int(strategy_dict.get('quantity') or 1)
 
@@ -668,8 +670,10 @@ def _simulate_options(strategy_dict, all_candles, kite, option_config):
 
     pattern   = _j(strategy_dict.get('candle_pattern'), {}) or {}
     direction = pattern.get('direction', 'bullish')
-    ind_cfg   = _j(pattern.get('indicator_settings'), {})
-    trade_cfg = _j(pattern.get('trade_filters'), {})
+    ind_cfg   = _j(strategy_dict.get('indicator_settings'), {})
+    trade_cfg = _j(strategy_dict.get('trade_filters'), {})
+    # Merge entry_conditions into pattern dict for _check_pattern() compat
+    pattern   = {**pattern, 'entry_conditions': _j(strategy_dict.get('entry_conditions'), [])}
     warmup    = _required_warmup(ind_cfg, trade_cfg)
     quantity  = int(strategy_dict.get('quantity') or 1)
 
@@ -884,8 +888,8 @@ def run_backtest():
         strategy_dict = strategy.to_dict()
         pattern       = strategy_dict.get('candle_pattern') or {}
         warmup        = _required_warmup(
-            pattern.get('indicator_settings'),
-            pattern.get('trade_filters'),
+            strategy_dict.get('indicator_settings'),
+            strategy_dict.get('trade_filters'),
         )
 
         # Keep days + warmup candles so first day in simulation window has proper history

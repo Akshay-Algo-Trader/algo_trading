@@ -29,6 +29,58 @@ logger = logging.getLogger(__name__)
 admin_backtest_bp = Blueprint('admin_backtest', __name__)
 
 
+def _last_thursday(date):
+    """Return the last Thursday on or before the given date."""
+    while date.weekday() != 3:  # 3 = Thursday
+        date -= timedelta(days=1)
+    return date
+
+
+def _option_expirations_last_3m():
+    """Generate all weekly option expiry dates from the last 3 months."""
+    now = datetime.now(_IST).date()
+    three_months_ago = now - timedelta(days=90)
+    expirations = []
+
+    # Get all Thursdays in the last 3 months (weekly expirations)
+    current = _last_thursday(now)
+    while current >= three_months_ago:
+        expirations.append(current)
+        current -= timedelta(days=7)
+
+    return sorted(expirations, reverse=True)  # Most recent first
+
+
+def _generate_option_symbols(underlying: str, expirations: list, strikes_range: int = 5) -> list[str]:
+    """Generate option symbols for an underlying across expirations.
+
+    Args:
+        underlying: Underlying symbol (e.g., 'APOLLOHOSP', 'NIFTY')
+        expirations: List of (date, atm_price) tuples for option expirations
+        strikes_range: Number of strikes above/below ATM to include
+
+    Returns:
+        List of option symbols like 'APOLLOHOSP25JUL7600CE'
+    """
+    symbols = []
+
+    for expiry_date, atm_price in expirations:
+        exp_str = expiry_date.strftime('%d%b').upper()
+
+        # Generate strikes around ATM (assuming 100-point intervals for stocks)
+        base_strike = int((atm_price // 100) * 100)
+        strike_interval = 50 if underlying in ['NIFTY', 'BANKNIFTY'] else 100
+
+        for strike_offset in range(-strikes_range, strikes_range + 1):
+            strike = base_strike + (strike_offset * strike_interval)
+            if strike > 0:
+                for option_type in ['CE', 'PE']:
+                    symbol = f"{underlying}{expiry_date.strftime('%d%b').upper()}{strike}{option_type}"
+                    symbols.append(symbol)
+
+    return symbols
+
+
 @admin_backtest_bp.post('/api/admin/backtest')
 @admin_required
 def run_admin_backtest():
@@ -152,174 +204,4 @@ def run_admin_backtest():
 
     except Exception as exc:
         logger.exception("Admin backtest failed for strategy %s user %s: %s", strategy_id, user_id, exc)
-        return jsonify({'error': str(exc)}), 500
-
-
-# ─── Pattern scanner ──────────────────────────────────────────────────────────
-# Scans a pattern against a universe of instruments and reports how many times
-# each instrument matched. The output is sorted by match count so the admin can
-# pick the best-fitting instrument for a given pattern.
-
-def _universe_symbols(universe: str) -> list[dict]:
-    """Resolve a universe key to a list of {symbol, exchange} dicts."""
-    from app.routes.customer.market import (
-        _NIFTY50_SYMBOLS, _SENSEX_SYMBOLS, _BANKNIFTY_SYMBOLS, _INDICES_LIST,
-    )
-    u = (universe or '').upper().replace(' ', '')
-    if u == 'NIFTY50':
-        return [{'symbol': s, 'exchange': 'NSE'} for s in _NIFTY50_SYMBOLS]
-    if u == 'SENSEX':
-        return [{'symbol': s, 'exchange': 'BSE'} for s in _SENSEX_SYMBOLS]
-    if u == 'BANKNIFTY':
-        return [{'symbol': s, 'exchange': 'NSE'} for s in _BANKNIFTY_SYMBOLS]
-    if u == 'INDICES':
-        return [{'symbol': i['symbol'], 'exchange': i['exchange']} for i in _INDICES_LIST]
-    if u == 'ALL':
-        seen = set()
-        out = []
-        for s in _NIFTY50_SYMBOLS:
-            key = ('NSE', s)
-            if key not in seen:
-                seen.add(key)
-                out.append({'symbol': s, 'exchange': 'NSE'})
-        for s in _SENSEX_SYMBOLS:
-            key = ('BSE', s)
-            if key not in seen:
-                seen.add(key)
-                out.append({'symbol': s, 'exchange': 'BSE'})
-        for s in _BANKNIFTY_SYMBOLS:
-            key = ('NSE', s)
-            if key not in seen:
-                seen.add(key)
-                out.append({'symbol': s, 'exchange': 'NSE'})
-        for i in _INDICES_LIST:
-            key = (i['exchange'], i['symbol'])
-            if key not in seen:
-                seen.add(key)
-                out.append({'symbol': i['symbol'], 'exchange': i['exchange']})
-        return out
-    return []
-
-
-@admin_backtest_bp.post('/api/admin/pattern-scan')
-@admin_required
-def run_pattern_scan():
-    """Scan one pattern against a universe of instruments — return per-instrument
-    match counts and dates. Useful for choosing which stock/index best fits a
-    given pattern before wiring it into a strategy."""
-    user_id = int(get_jwt_identity())
-    data    = request.get_json() or {}
-
-    pattern_id    = data.get('pattern_id')
-    universe_key  = (data.get('universe') or 'NIFTY50').upper()
-    apply_filters = bool(data.get('apply_indicator_filters'))
-    try:
-        days = min(max(int(data.get('days', 90)), 30), 365)
-    except (ValueError, TypeError):
-        days = 90
-
-    if not pattern_id:
-        return jsonify({'error': 'pattern_id required'}), 400
-
-    pattern = CandlePattern.query.get(pattern_id)
-    if not pattern:
-        return jsonify({'error': 'Pattern not found'}), 404
-
-    universe = _universe_symbols(universe_key)
-    if not universe:
-        return jsonify({'error': f'Unknown universe: {universe_key!r}'}), 400
-
-    config = KiteConfig.query.filter_by(user_id=user_id).first()
-    if not (config and config.is_connected and config.access_token_encrypted):
-        config = KiteConfig.query.filter_by(is_connected=True).first()
-    if not (config and config.access_token_encrypted):
-        return jsonify({'error': 'No connected Kite account available — connect one to run the scan'}), 400
-
-    try:
-        from kiteconnect import KiteConnect
-        from app.routes.customer.market import _resolve_token
-
-        kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
-        kite.set_access_token(decrypt(config.access_token_encrypted))
-
-        pattern_dict = pattern.to_dict()
-        ind_cfg = pattern_dict.get('indicator_settings') if apply_filters else None
-        warmup  = _required_warmup(
-            pattern_dict.get('indicator_settings'),
-            pattern_dict.get('trade_filters'),
-        )
-
-        now_ist   = datetime.now(_IST)
-        to_date   = now_ist.date()
-        from_date = to_date - timedelta(days=days + max(warmup, 30) + 60)  # extra for warmup + weekends
-
-        results = []
-        errors  = []
-        for inst in universe:
-            symbol, exchange = inst['symbol'], inst['exchange']
-            try:
-                token = _resolve_token(symbol, exchange, kite)
-                if not token:
-                    errors.append({'symbol': symbol, 'exchange': exchange, 'reason': 'instrument not found'})
-                    continue
-                raw = kite.historical_data(
-                    token,
-                    from_date.strftime('%Y-%m-%d'),
-                    to_date.strftime('%Y-%m-%d'),
-                    'day',
-                )
-            except Exception as exc:
-                errors.append({'symbol': symbol, 'exchange': exchange, 'reason': str(exc)[:120]})
-                continue
-
-            candles = [{
-                'date':   c['date'].strftime('%Y-%m-%d'),
-                'open':   c['open'], 'high': c['high'],
-                'low':    c['low'],  'close': c['close'],
-                'volume': c['volume'],
-            } for c in raw]
-            if len(candles) < warmup + 2:
-                continue
-
-            # Walk forward day by day; collect every match. Keep at most the
-            # first 30 sample dicts to bound the response size; the count is
-            # the total across all matches in the window.
-            matches = []
-            count   = 0
-            for i in range(warmup, len(candles)):
-                window = candles[:i + 1]
-                if not _check_pattern(pattern_dict, window):
-                    continue
-                if apply_filters and not _check_indicators(ind_cfg, window):
-                    continue
-                count += 1
-                if len(matches) < 30:
-                    matches.append({'date': candles[i]['date'], 'candle': candles[i]})
-
-            results.append({
-                'symbol':       symbol,
-                'exchange':     exchange,
-                'match_count':  count,
-                'matches':      matches,
-                'days_covered': max(0, len(candles) - warmup),
-            })
-
-        results.sort(key=lambda r: r['match_count'], reverse=True)
-
-        return jsonify({
-            'pattern':  pattern_dict,
-            'universe': universe_key,
-            'period':   {
-                'from': from_date.strftime('%Y-%m-%d'),
-                'to':   to_date.strftime('%Y-%m-%d'),
-                'days': days,
-            },
-            'apply_indicator_filters': apply_filters,
-            'instruments_scanned':     len(universe),
-            'results':                 results,
-            'errors':                  errors,
-        }), 200
-
-    except Exception as exc:
-        logger.exception("Pattern scan failed for pattern %s user %s: %s", pattern_id, user_id, exc)
         return jsonify({'error': str(exc)}), 500

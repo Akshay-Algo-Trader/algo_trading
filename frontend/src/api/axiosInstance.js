@@ -3,7 +3,7 @@ import axios from 'axios';
 // Use relative paths since everything is on the same server now
 const axiosInstance = axios.create({
   baseURL: '/',
-  timeout: 10000,
+  timeout: 100000,
   headers: {
     'Content-Type': 'application/json',
   },

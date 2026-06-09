@@ -10,6 +10,18 @@ import Strategies      from './pages/admin/Strategies'
 import StrategyEdit    from './pages/admin/StrategyEdit'
 import CandlePatterns     from './pages/admin/CandlePatterns'
 import CandlePatternEdit  from './pages/admin/CandlePatternEdit'
+import Zones           from './pages/admin/Zones'
+import ZoneEdit        from './pages/admin/ZoneEdit'
+import ZoneScan        from './pages/admin/ZoneScan'
+import ZoneScanDetail  from './pages/admin/ZoneScanDetail'
+import FvgZones        from './pages/admin/FvgZones'
+import FvgZoneEdit     from './pages/admin/FvgZoneEdit'
+import FvgZoneScan     from './pages/admin/FvgZoneScan'
+import FvgZoneScanDetail from './pages/admin/FvgZoneScanDetail'
+import SwingZones        from './pages/admin/SwingZones'
+import SwingZoneNew      from './pages/admin/SwingZoneNew'
+import SwingZoneEdit     from './pages/admin/SwingZoneEdit'
+import SwingZoneScanDetail from './pages/admin/SwingZoneScanDetail'
 import KiteConfig  from './pages/admin/KiteConfig'
 import Sessions    from './pages/admin/Sessions'
 import Orders      from './pages/admin/Orders'
@@ -58,6 +70,18 @@ export default function App() {
           <Route path="strategies/:id/edit" element={<StrategyEdit />} />
           <Route path="candle-patterns"              element={<CandlePatterns />} />
           <Route path="candle-patterns/:id/edit"   element={<CandlePatternEdit />} />
+          <Route path="zones"                     element={<Zones />} />
+          <Route path="zones/:id/edit"           element={<ZoneEdit />} />
+          <Route path="zones/:id/scan"           element={<ZoneScan />} />
+          <Route path="zones/:id/scan/:resultId" element={<ZoneScanDetail />} />
+          <Route path="fvg-zones"                        element={<FvgZones />} />
+          <Route path="fvg-zones/:id/edit"              element={<FvgZoneEdit />} />
+          <Route path="fvg-zones/:id/scan"              element={<FvgZoneScan />} />
+          <Route path="fvg-zones/:id/scan/:resultId"    element={<FvgZoneScanDetail />} />
+          <Route path="swing-zones"                        element={<SwingZones />} />
+          <Route path="swing-zones/new"                   element={<SwingZoneNew />} />
+          <Route path="swing-zones/:id/edit"              element={<SwingZoneEdit />} />
+          <Route path="swing-zones/:id/scan/:resultId"    element={<SwingZoneScanDetail />} />
           <Route path="kite-config" element={<KiteConfig />} />
           <Route path="backtest"    element={<AdminBacktest />} />
           <Route path="sessions"    element={<Sessions />} />

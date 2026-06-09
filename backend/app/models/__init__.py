@@ -3,6 +3,12 @@
 from app.models.user import User, UserRole
 from app.models.kite_config import KiteConfig
 from app.models.candle_pattern import CandlePattern
+from app.models.zone_config import ZoneConfig
+from app.models.zone_scan_result import ZoneScanResult
+from app.models.fvg_zone_config import FvgZoneConfig
+from app.models.fvg_zone_scan_result import FvgZoneScanResult
+from app.models.swing_zone_config import SwingZoneConfig
+from app.models.swing_zone_scan_result import SwingZoneScanResult
 from app.models.strategy import Strategy, OrderType, Exchange
 from app.models.user_strategy import UserStrategy
 from app.models.trading_session import TradingSession, SessionMode, SessionStatus
@@ -19,6 +25,12 @@ __all__ = [
     'UserRole',
     'KiteConfig',
     'CandlePattern',
+    'ZoneConfig',
+    'ZoneScanResult',
+    'FvgZoneConfig',
+    'FvgZoneScanResult',
+    'SwingZoneConfig',
+    'SwingZoneScanResult',
     'Strategy',
     'OrderType',
     'Exchange',

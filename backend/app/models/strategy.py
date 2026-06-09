@@ -34,6 +34,10 @@ class Strategy(db.Model):
     take_profit_pct = db.Column(db.Float, nullable=False)  # Take profit percentage
     stop_loss_rules = db.Column(JSON, nullable=True)
     target_rules = db.Column(JSON, nullable=True)
+    timeframes = db.Column(JSON, nullable=True)
+    entry_conditions = db.Column(JSON, nullable=True)
+    indicator_settings = db.Column(JSON, nullable=True)
+    trade_filters = db.Column(JSON, nullable=True)
     candle_pattern_id = db.Column(db.Integer, db.ForeignKey('candle_patterns.id'), nullable=True, index=True)
     option_config = db.Column(JSON, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
@@ -60,6 +64,10 @@ class Strategy(db.Model):
             'take_profit_pct': self.take_profit_pct,
             'stop_loss_rules': self.stop_loss_rules,
             'target_rules': self.target_rules,
+            'timeframes': self.timeframes,
+            'entry_conditions': self.entry_conditions,
+            'indicator_settings': self.indicator_settings,
+            'trade_filters': self.trade_filters,
             'candle_pattern_id': self.candle_pattern_id,
             'candle_pattern': self.candle_pattern.to_dict() if self.candle_pattern else None,
             'option_config': self.option_config,

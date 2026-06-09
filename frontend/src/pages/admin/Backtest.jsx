@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import axiosInstance from '../../api/axiosInstance'
 import BacktestPanel, { BacktestControls } from '../../components/BacktestPanel'
-import PatternScanPanel from '../../components/PatternScanPanel'
 import { PageHeader } from '../../components/admin/TableHelpers'
 
 function StrategyBacktestTab() {
@@ -80,64 +79,15 @@ function StrategyBacktestTab() {
   )
 }
 
-function PatternScanTab() {
-  const [patterns, setPatterns] = useState([])
-  const [patternId, setPatternId] = useState('')
-
-  useEffect(() => {
-    axiosInstance.get('/api/admin/candle-patterns')
-      .then(r => {
-        const list = r.data?.patterns || []
-        setPatterns(list)
-        if (list.length > 0) setPatternId(String(list[0].id))
-      })
-      .catch(() => {})
-  }, [])
-
-  return (
-    <PatternScanPanel
-      patterns={patterns}
-      patternId={patternId}
-      onPatternChange={setPatternId}
-    />
-  )
-}
-
-const TABS = [
-  { id: 'strategy', label: 'Strategy Backtest' },
-  { id: 'pattern',  label: 'Pattern Scanner' },
-]
-
 export default function AdminBacktest() {
-  const [searchParams] = useSearchParams()
-  const initial = searchParams.get('tab') === 'pattern' ? 'pattern' : 'strategy'
-  const [tab, setTab] = useState(initial)
-
   return (
     <div>
       <PageHeader title="Backtest" />
       <p className="-mt-3 mb-5 text-sm text-gray-500">
-        Replay strategies against historical data, or scan a pattern across many instruments to find the best fit.
+        Replay strategies against historical data to validate performance.
       </p>
 
-      <div className="flex border-b border-gray-200 mb-6">
-        {TABS.map(t => (
-          <button
-            key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-5 py-2.5 text-sm font-medium transition-colors border-b-2 ${
-              tab === t.id
-                ? 'border-[#eb5202] text-[#eb5202]'
-                : 'border-transparent text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
-
-      {tab === 'strategy' && <StrategyBacktestTab />}
-      {tab === 'pattern'  && <PatternScanTab />}
+      <StrategyBacktestTab />
     </div>
   )
 }

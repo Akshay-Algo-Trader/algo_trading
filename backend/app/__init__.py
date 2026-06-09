@@ -39,29 +39,38 @@ def create_app(config_name='development'):
     from app.services.session_manager import session_manager
     session_manager.init_app(app)
     
-    # API routes - register these BEFORE the catch-all route
+    # API routes
     @app.route('/api/health')
     def health_check():
         return {'status': 'ok', 'message': 'AlgoTrader Backend is running'}, 200
-    
-    # Serve React frontend for homepage
-    @app.route('/', defaults={'path': ''})
-    @app.route('/<path:path>')
-    def serve_frontend(path):
-        """Serve React app homepage"""
-        # Don't serve admin routes on this port
-        if path.startswith('admin'):
-            return 'Admin routes are on port 8000', 404
-        
-        # Serve static files (JS, CSS, images, etc.)
-        if path and os.path.exists(os.path.join(app.static_folder, path)):
-            return send_from_directory(app.static_folder, path)
-        
-        # Serve index.html for all other routes (React Router will handle them)
+
+    # Serve static files explicitly
+    @app.route('/assets/<path:filename>')
+    def serve_assets(filename):
+        """Serve static assets"""
+        return send_from_directory(os.path.join(app.static_folder, 'assets'), filename)
+
+    # 404 handler - serve React frontend for all non-API routes
+    @app.errorhandler(404)
+    def serve_frontend(error):
+        """Serve React app for all non-API routes"""
+        # Check if the request path is an API route (should not reach here)
+        if request.path.startswith('/api/') or request.path.startswith('/admin'):
+            return 'Not Found', 404
+
+        # Serve index.html for React Router to handle
         index_path = os.path.join(app.static_folder, 'index.html')
         if os.path.exists(index_path):
             return send_from_directory(app.static_folder, 'index.html')
-        
+
+        return 'Frontend not built. Run: cd frontend && npm run build', 404
+
+    # Serve root
+    @app.route('/')
+    def root():
+        index_path = os.path.join(app.static_folder, 'index.html')
+        if os.path.exists(index_path):
+            return send_from_directory(app.static_folder, 'index.html')
         return 'Frontend not built. Run: cd frontend && npm run build', 404
     
     @app.shell_context_processor
