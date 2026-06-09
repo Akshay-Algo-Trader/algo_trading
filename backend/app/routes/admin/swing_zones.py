@@ -160,26 +160,43 @@ def scan_swing_zones(config_id):
         period_from = report_candles[0]['date'] if report_candles else from_date.strftime('%Y-%m-%d')
         period_to = report_candles[-1]['date'] if report_candles else to_date.strftime('%Y-%m-%d')
 
-        # Trim history to last 19 before inserting so total stays at 20
-        existing = SwingZoneScanResult.query.filter_by(swing_config_id=config_id)\
-            .order_by(SwingZoneScanResult.scanned_at.asc()).all()
-        if len(existing) >= 20:
-            for old in existing[:len(existing) - 19]:
-                db.session.delete(old)
-
-        result = SwingZoneScanResult(
+        result = SwingZoneScanResult.query.filter_by(
             swing_config_id=config_id,
             instrument=instrument,
             exchange=exchange,
-            candle_size=candle_size,
-            period_days=period_days,
-            period_from=period_from,
-            period_to=period_to,
-            levels_detected=levels,
-            total_levels=len(levels),
-            scanned_by=user_id,
-        )
-        db.session.add(result)
+        ).first()
+
+        if result:
+            result.candle_size = candle_size
+            result.period_days = period_days
+            result.period_from = period_from
+            result.period_to = period_to
+            result.levels_detected = levels
+            result.total_levels = len(levels)
+            result.scanned_by = user_id
+            result.scanned_at = datetime.now(timezone.utc)
+        else:
+            # Trim history to 19 before adding so total stays at 20
+            existing = SwingZoneScanResult.query.filter_by(swing_config_id=config_id)\
+                .order_by(SwingZoneScanResult.scanned_at.asc()).all()
+            if len(existing) >= 20:
+                for old in existing[:len(existing) - 19]:
+                    db.session.delete(old)
+
+            result = SwingZoneScanResult(
+                swing_config_id=config_id,
+                instrument=instrument,
+                exchange=exchange,
+                candle_size=candle_size,
+                period_days=period_days,
+                period_from=period_from,
+                period_to=period_to,
+                levels_detected=levels,
+                total_levels=len(levels),
+                scanned_by=user_id,
+            )
+            db.session.add(result)
+
         db.session.commit()
 
         resistance_count = sum(1 for lv in levels if lv['type'] == 'RESISTANCE')
