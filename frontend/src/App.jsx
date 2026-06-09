@@ -14,6 +14,14 @@ import Zones           from './pages/admin/Zones'
 import ZoneEdit        from './pages/admin/ZoneEdit'
 import ZoneScan        from './pages/admin/ZoneScan'
 import ZoneScanDetail  from './pages/admin/ZoneScanDetail'
+import FvgZones        from './pages/admin/FvgZones'
+import FvgZoneEdit     from './pages/admin/FvgZoneEdit'
+import FvgZoneScan     from './pages/admin/FvgZoneScan'
+import FvgZoneScanDetail from './pages/admin/FvgZoneScanDetail'
+import SwingZones        from './pages/admin/SwingZones'
+import SwingZoneEdit     from './pages/admin/SwingZoneEdit'
+import SwingZoneScan     from './pages/admin/SwingZoneScan'
+import SwingZoneScanDetail from './pages/admin/SwingZoneScanDetail'
 import KiteConfig  from './pages/admin/KiteConfig'
 import Sessions    from './pages/admin/Sessions'
 import Orders      from './pages/admin/Orders'
@@ -66,6 +74,14 @@ export default function App() {
           <Route path="zones/:id/edit"           element={<ZoneEdit />} />
           <Route path="zones/:id/scan"           element={<ZoneScan />} />
           <Route path="zones/:id/scan/:resultId" element={<ZoneScanDetail />} />
+          <Route path="fvg-zones"                        element={<FvgZones />} />
+          <Route path="fvg-zones/:id/edit"              element={<FvgZoneEdit />} />
+          <Route path="fvg-zones/:id/scan"              element={<FvgZoneScan />} />
+          <Route path="fvg-zones/:id/scan/:resultId"    element={<FvgZoneScanDetail />} />
+          <Route path="swing-zones"                        element={<SwingZones />} />
+          <Route path="swing-zones/:id/edit"              element={<SwingZoneEdit />} />
+          <Route path="swing-zones/:id/scan"              element={<SwingZoneScan />} />
+          <Route path="swing-zones/:id/scan/:resultId"    element={<SwingZoneScanDetail />} />
           <Route path="kite-config" element={<KiteConfig />} />
           <Route path="backtest"    element={<AdminBacktest />} />
           <Route path="sessions"    element={<Sessions />} />

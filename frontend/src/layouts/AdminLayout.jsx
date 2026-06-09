@@ -38,6 +38,16 @@ const NAV_ITEMS = [
     icon: <Icon d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />,
   },
   {
+    path: '/admin/fvg-zones',
+    label: 'FVG Zones',
+    icon: <Icon d="M3 10h11M9 21V3M3 14h11m7-4l-3 3 3 3" />,
+  },
+  {
+    path: '/admin/swing-zones',
+    label: 'Swing Levels',
+    icon: <Icon d="M3 17l4-8 4 4 4-6 4 10" />,
+  },
+  {
     path: '/admin/kite-config',
     label: 'Kite Config',
     icon: <Icon d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />,
@@ -71,6 +81,8 @@ const BREADCRUMB_MAP = {
   strategies: 'Strategies',
   'candle-patterns': 'Candle Patterns',
   zones: 'Zones',
+  'fvg-zones': 'FVG Zones',
+  'swing-zones': 'Swing Levels',
   'kite-config': 'Kite Config',
   backtest: 'Backtest',
   sessions: 'Sessions',
