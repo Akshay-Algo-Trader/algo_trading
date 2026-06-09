@@ -102,10 +102,24 @@ def scan_swing_zones(config_id):
         return jsonify({'error': 'instrument required'}), 400
 
     candle_size = swing_config.candle_size
-    period_days = int(data['period_days']) if data.get('period_days') else swing_config.period_days
     is_4h = candle_size == '4hour'
-
     kite_interval = _KITE_INTERVAL.get(candle_size, '60minute')
+
+    start_date_str = data.get('start_date', '').strip()
+    end_date_str = data.get('end_date', '').strip()
+    if start_date_str and end_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'error': 'Invalid date format, expected YYYY-MM-DD'}), 400
+        if start_date >= end_date:
+            return jsonify({'error': 'start_date must be before end_date'}), 400
+        period_days = (end_date - start_date).days
+    else:
+        period_days = swing_config.period_days
+        end_date = datetime.now(_IST).date()
+        start_date = end_date - timedelta(days=period_days)
 
     kite_cfg = KiteConfig.query.filter_by(user_id=user_id).first()
     if not (kite_cfg and kite_cfg.is_connected and kite_cfg.access_token_encrypted):
@@ -124,14 +138,12 @@ def scan_swing_zones(config_id):
         if not token:
             return jsonify({'error': f'{exchange}:{instrument} not found'}), 404
 
-        now_ist = datetime.now(_IST)
-        to_date = now_ist.date()
-        from_date = to_date - timedelta(days=period_days + 40)
+        fetch_from = start_date - timedelta(days=40)
 
         raw = kite.historical_data(
             token,
-            from_date.strftime('%Y-%m-%d'),
-            to_date.strftime('%Y-%m-%d'),
+            fetch_from.strftime('%Y-%m-%d'),
+            end_date.strftime('%Y-%m-%d'),
             kite_interval,
         )
 
@@ -150,36 +162,53 @@ def scan_swing_zones(config_id):
         if len(all_candles) < swing_config.pivot_bars * 2 + 1:
             return jsonify({'error': 'Not enough historical data for this instrument'}), 400
 
-        candles_per_day = {'15min': 25, '30min': 13, '1hour': 6, '4hour': 2}
-        cpd = candles_per_day.get(candle_size, 6)
-        report_candle_count = period_days * cpd
-        report_candles = all_candles[-report_candle_count:] if len(all_candles) >= report_candle_count else all_candles
+        start_filter = start_date.strftime('%Y-%m-%d')
+        report_candles = [c for c in all_candles if c['date'][:10] >= start_filter]
+        if not report_candles:
+            report_candles = all_candles
 
         levels = detect_sr_levels(report_candles, pivot_bars=swing_config.pivot_bars)
 
         period_from = report_candles[0]['date'] if report_candles else from_date.strftime('%Y-%m-%d')
         period_to = report_candles[-1]['date'] if report_candles else to_date.strftime('%Y-%m-%d')
 
-        # Trim history to last 19 before inserting so total stays at 20
-        existing = SwingZoneScanResult.query.filter_by(swing_config_id=config_id)\
-            .order_by(SwingZoneScanResult.scanned_at.asc()).all()
-        if len(existing) >= 20:
-            for old in existing[:len(existing) - 19]:
-                db.session.delete(old)
-
-        result = SwingZoneScanResult(
+        result = SwingZoneScanResult.query.filter_by(
             swing_config_id=config_id,
             instrument=instrument,
             exchange=exchange,
-            candle_size=candle_size,
-            period_days=period_days,
-            period_from=period_from,
-            period_to=period_to,
-            levels_detected=levels,
-            total_levels=len(levels),
-            scanned_by=user_id,
-        )
-        db.session.add(result)
+        ).first()
+
+        if result:
+            result.candle_size = candle_size
+            result.period_days = period_days
+            result.period_from = period_from
+            result.period_to = period_to
+            result.levels_detected = levels
+            result.total_levels = len(levels)
+            result.scanned_by = user_id
+            result.scanned_at = datetime.now(timezone.utc)
+        else:
+            # Trim history to 19 before adding so total stays at 20
+            existing = SwingZoneScanResult.query.filter_by(swing_config_id=config_id)\
+                .order_by(SwingZoneScanResult.scanned_at.asc()).all()
+            if len(existing) >= 20:
+                for old in existing[:len(existing) - 19]:
+                    db.session.delete(old)
+
+            result = SwingZoneScanResult(
+                swing_config_id=config_id,
+                instrument=instrument,
+                exchange=exchange,
+                candle_size=candle_size,
+                period_days=period_days,
+                period_from=period_from,
+                period_to=period_to,
+                levels_detected=levels,
+                total_levels=len(levels),
+                scanned_by=user_id,
+            )
+            db.session.add(result)
+
         db.session.commit()
 
         resistance_count = sum(1 for lv in levels if lv['type'] == 'RESISTANCE')

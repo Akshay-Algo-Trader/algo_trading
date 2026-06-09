@@ -43,8 +43,8 @@ export default function SwingZoneScanDetail() {
   }
 
   const levels = result.levels_detected ?? []
-  const resistance = levels.filter(l => l.type === 'RESISTANCE')
-  const support = levels.filter(l => l.type === 'SUPPORT')
+  const resistance = levels.filter(l => l.type === 'RESISTANCE').sort((a, b) => String(a.date).localeCompare(String(b.date)))
+  const support = levels.filter(l => l.type === 'SUPPORT').sort((a, b) => String(a.date).localeCompare(String(b.date)))
 
   return (
     <div className="space-y-6">

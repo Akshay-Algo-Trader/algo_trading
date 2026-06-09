@@ -26,9 +26,21 @@ export default function SwingZoneEdit() {
   const [saveError, setSaveError] = useState('')
   const [saved, setSaved] = useState(false)
 
+  const today = new Date().toISOString().slice(0, 10)
+
   // Scan state
   const [instrument, setInstrument] = useState('')
   const [exchange, setExchange] = useState('NSE')
+  const [startDate, setStartDate] = useState(() =>
+    new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+  )
+  const [endDate, setEndDate] = useState(today)
+
+  useEffect(() => {
+    if (form?.period_days) {
+      setStartDate(new Date(Date.now() - form.period_days * 86400000).toISOString().slice(0, 10))
+    }
+  }, [form?.period_days])
   const [scanning, setScanning] = useState(false)
   const [scanError, setScanError] = useState('')
   const [scanResult, setScanResult] = useState(null)
@@ -84,6 +96,8 @@ export default function SwingZoneEdit() {
       const res = await axiosInstance.post(`/api/admin/swing-zones/${id}/scan`, {
         instrument: instrument.trim().toUpperCase(),
         exchange,
+        start_date: startDate,
+        end_date: endDate,
       })
       setScanResult(res.data.scan_result)
       setSummary(res.data.summary)
@@ -113,8 +127,8 @@ export default function SwingZoneEdit() {
   }
 
   const levels = scanResult?.levels_detected ?? []
-  const resistance = levels.filter(l => l.type === 'RESISTANCE')
-  const support = levels.filter(l => l.type === 'SUPPORT')
+  const resistance = levels.filter(l => l.type === 'RESISTANCE').sort((a, b) => String(a.date).localeCompare(String(b.date)))
+  const support = levels.filter(l => l.type === 'SUPPORT').sort((a, b) => String(a.date).localeCompare(String(b.date)))
 
   return (
     <div className="space-y-6">
@@ -194,8 +208,8 @@ export default function SwingZoneEdit() {
       {/* Scan */}
       <Card className="p-6">
         <h2 className="text-sm font-semibold text-gray-900 mb-4 uppercase tracking-wide">Scan</h2>
-        <form onSubmit={handleScan} className="flex items-end gap-4 flex-wrap">
-          <div className="w-64">
+        <form onSubmit={handleScan} className="flex items-end gap-3 flex-wrap">
+          <div className="w-52">
             <FormField label="Instrument">
               <InstrumentSearch
                 value={instrument}
@@ -203,7 +217,7 @@ export default function SwingZoneEdit() {
               />
             </FormField>
           </div>
-          <div className="w-44">
+          <div className="w-36">
             <FormField label="Exchange">
               <Select value={exchange} onChange={e => setExchange(e.target.value)}>
                 <option value="NSE">NSE</option>
@@ -213,9 +227,39 @@ export default function SwingZoneEdit() {
               </Select>
             </FormField>
           </div>
-          <Btn variant="primary" type="submit" disabled={scanning}>
-            {scanning ? 'Scanning…' : 'Run Scan'}
-          </Btn>
+          <div className="w-40">
+            <FormField label="Start Date">
+              <Input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} max={endDate} />
+            </FormField>
+          </div>
+          <div className="w-40">
+            <FormField label="End Date">
+              <Input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} max={today} />
+            </FormField>
+          </div>
+          <div className="mb-4 ml-4 pl-4 border-l border-gray-200">
+            <div className="text-sm mb-1 invisible select-none">.</div>
+            <Btn variant="primary" type="submit" disabled={scanning} className="flex items-center gap-2 px-5 py-2.5 text-sm font-semibold">
+              {scanning ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                  Scanning…
+                </>
+              ) : (
+                <>
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <circle cx="11" cy="11" r="7" strokeWidth="2" strokeLinecap="round" />
+                    <path d="M21 21l-4.35-4.35" strokeWidth="2" strokeLinecap="round" />
+                    <path d="M8 11h6M11 8v6" strokeWidth="2" strokeLinecap="round" />
+                  </svg>
+                  Run Scan
+                </>
+              )}
+            </Btn>
+          </div>
         </form>
         {scanError && <p className="mt-3 text-sm text-red-500">{scanError}</p>}
         {summary && (
