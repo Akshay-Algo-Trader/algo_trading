@@ -8,7 +8,7 @@ import InstrumentSearch from '../../components/admin/InstrumentSearch'
 import SRChart from '../../components/admin/SwingZoneChart'
 
 const PERIOD_OPTIONS = [1, 7, 10, 30, 60, 90]
-const SIZE_LABELS = { '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
+const SIZE_LABELS = { '1min': '1 Min', '5min': '5 Min', '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
 
 const EMPTY_FORM = {
   name: '',
