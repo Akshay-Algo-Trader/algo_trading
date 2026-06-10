@@ -76,6 +76,18 @@ export default function SRChart({ levels, instrument, exchange, candleSize, peri
           })
         }
 
+        const currentPrice = candles[candles.length - 1]?.close
+        if (currentPrice != null) {
+          candleSeries.createPriceLine({
+            price: currentPrice,
+            color: '#2563eb',
+            lineWidth: 1,
+            lineStyle: LineStyle.Solid,
+            axisLabelVisible: true,
+            title: `LTP ${currentPrice}`,
+          })
+        }
+
         chart.timeScale().fitContent()
         setStatus('ready')
 
@@ -130,6 +142,12 @@ export default function SRChart({ levels, instrument, exchange, candleSize, peri
               <line x1="0" y1="4" x2="20" y2="4" stroke="#16a34a" strokeWidth="1.5" strokeDasharray="4 3" />
             </svg>
             Support ({supportCount})
+          </span>
+          <span className="flex items-center gap-1.5">
+            <svg width="20" height="8" viewBox="0 0 20 8">
+              <line x1="0" y1="4" x2="20" y2="4" stroke="#2563eb" strokeWidth="1.5" />
+            </svg>
+            LTP
           </span>
         </div>
       </div>

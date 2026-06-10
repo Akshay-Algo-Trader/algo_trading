@@ -4,7 +4,7 @@ import axiosInstance from '../../api/axiosInstance'
 import { Card, Btn, PageHeader } from '../../components/admin/TableHelpers'
 import SRChart from '../../components/admin/SwingZoneChart'
 
-const SIZE_LABELS = { '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
+const SIZE_LABELS = { '1min': '1 Min', '5min': '5 Min', '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
 
 function fmt(dt) {
   if (!dt) return '—'
@@ -87,20 +87,6 @@ export default function SwingZoneScanDetail() {
         </div>
       </Card>
 
-      {/* Chart */}
-      {levels.length > 0 && (
-        <Card className="p-6">
-          <SRChart
-            levels={levels}
-            instrument={result.instrument}
-            exchange={result.exchange}
-            candleSize={result.candle_size}
-            periodFrom={result.period.from}
-            periodTo={result.period.to}
-          />
-        </Card>
-      )}
-
       {/* Levels table */}
       {levels.length > 0 && (
         <Card className="p-6">
@@ -133,6 +119,20 @@ export default function SwingZoneScanDetail() {
               </div>
             </div>
           </div>
+        </Card>
+      )}
+
+      {/* Chart */}
+      {levels.length > 0 && (
+        <Card className="p-6">
+          <SRChart
+            levels={levels}
+            instrument={result.instrument}
+            exchange={result.exchange}
+            candleSize={result.candle_size}
+            periodFrom={result.period.from}
+            periodTo={result.period.to}
+          />
         </Card>
       )}
     </div>

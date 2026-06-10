@@ -6,7 +6,7 @@ import {
   Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
 
-const SIZE_LABELS = { '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
+const SIZE_LABELS = { '1min': '1 Min', '5min': '5 Min', '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
 
 export default function SwingZones() {
   const navigate = useNavigate()

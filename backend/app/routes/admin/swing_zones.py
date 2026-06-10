@@ -15,14 +15,36 @@ admin_swing_zones_bp = Blueprint('admin_swing_zones', __name__)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
 _KITE_INTERVAL = {
+    '1min': 'minute',
+    '5min': '5minute',
     '15min': '15minute',
     '30min': '30minute',
     '1hour': '60minute',
     '4hour': '60minute',
 }
 
-_VALID_SIZES = ('15min', '30min', '1hour', '4hour')
+_VALID_SIZES = ('1min', '5min', '15min', '30min', '1hour', '4hour')
 _VALID_PERIODS = (1, 7, 10, 30, 60, 90)
+
+# Buffer days fetched before start_date to give pivot detection lookback context
+_BUFFER_DAYS = {
+    '1min': 3,
+    '5min': 5,
+    '15min': 7,
+    '30min': 10,
+    '1hour': 15,
+    '4hour': 40,
+}
+
+# Kite historical data API max range (days) per interval
+_MAX_FETCH_DAYS = {
+    '1min': 60,
+    '5min': 100,
+    '15min': 200,
+    '30min': 200,
+    '1hour': 400,
+    '4hour': 400,
+}
 
 
 @admin_swing_zones_bp.get('/api/admin/swing-zones')
@@ -116,6 +138,10 @@ def scan_swing_zones(config_id):
         if start_date >= end_date:
             return jsonify({'error': 'start_date must be before end_date'}), 400
         period_days = (end_date - start_date).days
+
+        max_days = _MAX_FETCH_DAYS.get(candle_size, 400) - _BUFFER_DAYS.get(candle_size, 40)
+        if period_days > max_days:
+            return jsonify({'error': f'Date range too large for {candle_size} candles (max {max_days} days)'}), 400
     else:
         period_days = swing_config.period_days
         end_date = datetime.now(_IST).date()
@@ -138,7 +164,7 @@ def scan_swing_zones(config_id):
         if not token:
             return jsonify({'error': f'{exchange}:{instrument} not found'}), 404
 
-        fetch_from = start_date - timedelta(days=40)
+        fetch_from = start_date - timedelta(days=_BUFFER_DAYS.get(candle_size, 40))
 
         raw = kite.historical_data(
             token,
@@ -291,7 +317,9 @@ def get_swing_chart_candles():
             'open': c['open'], 'high': c['high'],
             'low': c['low'], 'close': c['close'],
             'volume': c.get('volume', 0),
-            '_ts': int(c['date'].timestamp()),
+            # Reinterpret IST wall-clock as UTC so lightweight-charts (which renders
+            # numeric timestamps in UTC) displays the correct IST time.
+            '_ts': int(c['date'].replace(tzinfo=timezone.utc).timestamp()),
         } for c in raw]
 
         if is_4h:

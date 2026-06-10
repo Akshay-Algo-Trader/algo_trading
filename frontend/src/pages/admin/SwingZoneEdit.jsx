@@ -8,7 +8,7 @@ import InstrumentSearch from '../../components/admin/InstrumentSearch'
 import SRChart from '../../components/admin/SwingZoneChart'
 
 const PERIOD_OPTIONS = [1, 7, 10, 30, 60, 90]
-const SIZE_LABELS = { '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
+const SIZE_LABELS = { '1min': '1 Min', '5min': '5 Min', '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
 
 function fmt(dt) {
   if (!dt) return '—'
@@ -279,19 +279,6 @@ export default function SwingZoneEdit() {
         )}
       </Card>
 
-      {scanResult && levels.length > 0 && (
-        <Card className="p-6">
-          <SRChart
-            levels={levels}
-            instrument={scanResult.instrument}
-            exchange={scanResult.exchange}
-            candleSize={scanResult.candle_size}
-            periodFrom={scanResult.period.from}
-            periodTo={scanResult.period.to}
-          />
-        </Card>
-      )}
-
       {levels.length > 0 && (
         <Card className="p-6">
           <div className="grid grid-cols-2 gap-6">
@@ -322,6 +309,19 @@ export default function SwingZoneEdit() {
               </div>
             </div>
           </div>
+        </Card>
+      )}
+
+      {scanResult && levels.length > 0 && (
+        <Card className="p-6">
+          <SRChart
+            levels={levels}
+            instrument={scanResult.instrument}
+            exchange={scanResult.exchange}
+            candleSize={scanResult.candle_size}
+            periodFrom={scanResult.period.from}
+            periodTo={scanResult.period.to}
+          />
         </Card>
       )}
 
