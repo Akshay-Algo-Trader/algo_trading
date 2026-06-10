@@ -172,3 +172,156 @@ export default function SRChart({ levels, instrument, exchange, candleSize, peri
     </div>
   )
 }
+
+// Closest resistance above, and closest support below, the current price —
+// the levels most relevant for an immediate trade decision.
+export function findNearestLevels(levels, currentPrice) {
+  let nearestResistance = null
+  let nearestSupport = null
+  if (currentPrice == null) return { nearestResistance, nearestSupport }
+
+  for (const l of levels ?? []) {
+    if (l.type === 'RESISTANCE' && l.price > currentPrice) {
+      if (!nearestResistance || l.price < nearestResistance.price) nearestResistance = l
+    }
+    if (l.type === 'SUPPORT' && l.price < currentPrice) {
+      if (!nearestSupport || l.price > nearestSupport.price) nearestSupport = l
+    }
+  }
+  return { nearestResistance, nearestSupport }
+}
+
+export function NearbyLevels({ levels, currentPrice }) {
+  if (currentPrice == null) return null
+  const { nearestResistance, nearestSupport } = findNearestLevels(levels, currentPrice)
+
+  return (
+    <div className="grid grid-cols-3 gap-3 mb-4">
+      <div className="rounded-lg border border-blue-100 bg-blue-50 p-3">
+        <p className="text-xs font-semibold text-blue-600 uppercase tracking-wide">Current Price (LTP)</p>
+        <p className="text-lg font-bold text-blue-900 mt-1">{currentPrice}</p>
+      </div>
+      <div className="rounded-lg border border-red-100 bg-red-50 p-3">
+        <p className="text-xs font-semibold text-red-600 uppercase tracking-wide">Nearest Resistance</p>
+        {nearestResistance ? (
+          <>
+            <p className="text-lg font-bold text-red-700 mt-1">{nearestResistance.price}</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              +{(nearestResistance.price - currentPrice).toFixed(2)} ({(((nearestResistance.price - currentPrice) / currentPrice) * 100).toFixed(2)}%)
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-gray-400 mt-1">None above LTP</p>
+        )}
+      </div>
+      <div className="rounded-lg border border-green-100 bg-green-50 p-3">
+        <p className="text-xs font-semibold text-green-600 uppercase tracking-wide">Nearest Support</p>
+        {nearestSupport ? (
+          <>
+            <p className="text-lg font-bold text-green-700 mt-1">{nearestSupport.price}</p>
+            <p className="text-xs text-gray-500 mt-0.5">
+              -{(currentPrice - nearestSupport.price).toFixed(2)} ({(((currentPrice - nearestSupport.price) / currentPrice) * 100).toFixed(2)}%)
+            </p>
+          </>
+        ) : (
+          <p className="text-sm text-gray-400 mt-1">None below LTP</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+export const STRONG_LEVEL_PCT_OPTIONS = [0.1, 0.5, 1.0, 1.5, 2.0]
+
+// Groups levels of one type into clusters of consecutive prices (sorted)
+// where each neighbour is within `pct`% of the previous one. Clusters with
+// 2+ members are "strong" — represented by the MAX price for resistance
+// (the highest ceiling of the cluster) and the MIN price for support
+// (the lowest floor of the cluster).
+export function findStrongLevels(levels, pct) {
+  if (!pct) return { strongResistance: [], strongSupport: [] }
+
+  function clusters(type, pickStrong) {
+    const sorted = (levels ?? [])
+      .filter(l => l.type === type)
+      .slice()
+      .sort((a, b) => a.price - b.price)
+
+    const groups = []
+    let current = []
+    for (const l of sorted) {
+      if (current.length) {
+        const prev = current[current.length - 1]
+        const diffPct = ((l.price - prev.price) / prev.price) * 100
+        if (diffPct > pct) {
+          groups.push(current)
+          current = []
+        }
+      }
+      current.push(l)
+    }
+    if (current.length) groups.push(current)
+
+    return groups
+      .filter(g => g.length >= 2)
+      .map(g => ({ price: pickStrong(g.map(l => l.price)), members: g }))
+  }
+
+  return {
+    strongResistance: clusters('RESISTANCE', prices => Math.max(...prices)),
+    strongSupport: clusters('SUPPORT', prices => Math.min(...prices)),
+  }
+}
+
+// For a strong cluster's representative price, returns the prices of the
+// other levels grouped into that cluster (or null if `price` isn't a
+// strong-cluster representative).
+export function strongClusterOthers(strongClusters, price) {
+  const cluster = strongClusters.find(c => c.price === price)
+  if (!cluster) return null
+  return cluster.members.filter(m => m.price !== price).map(m => m.price)
+}
+
+// Most recently formed level (by date) across both types — whether it's a
+// resistance (recent swing high) or support (recent swing low) hints at the
+// current bias for a buy vs sell side trade.
+export function findLastLevel(levels) {
+  if (!levels?.length) return null
+  return levels.reduce((latest, l) =>
+    (!latest || String(l.date) > String(latest.date)) ? l : latest
+  , null)
+}
+
+export function StrongLevels({ levels, pct }) {
+  const { strongResistance, strongSupport } = findStrongLevels(levels, pct)
+  const lastLevel = findLastLevel(levels)
+  if (!strongResistance.length && !strongSupport.length && !lastLevel) return null
+
+  return (
+    <div className="mb-4">
+      <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+        Strong Levels — clusters within {pct}%
+      </p>
+      <div className="flex flex-wrap gap-2">
+        {strongResistance.map((c, i) => (
+          <span key={`r${i}`} className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-red-100 text-red-700 border border-red-200">
+            R {c.price}
+            <span className="text-red-400 font-normal">({c.members.length} levels)</span>
+          </span>
+        ))}
+        {strongSupport.map((c, i) => (
+          <span key={`s${i}`} className="inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full bg-green-100 text-green-700 border border-green-200">
+            S {c.price}
+            <span className="text-green-400 font-normal">({c.members.length} levels)</span>
+          </span>
+        ))}
+        {lastLevel && (
+          <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border border-dashed ${lastLevel.type === 'RESISTANCE' ? 'bg-red-50 text-red-700 border-red-300' : 'bg-green-50 text-green-700 border-green-300'}`}>
+            Last Level: {lastLevel.type === 'RESISTANCE' ? 'R' : 'S'} {lastLevel.price}
+            <span className="text-gray-400 font-normal">{String(lastLevel.date).slice(0, 16)}</span>
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}

@@ -25,6 +25,7 @@ _KITE_INTERVAL = {
 
 _VALID_SIZES = ('1min', '5min', '15min', '30min', '1hour', '4hour')
 _VALID_PERIODS = (1, 7, 10, 30, 60, 90)
+_VALID_STRONG_PCTS = (0.1, 0.5, 1.0, 1.5, 2.0)
 
 # Buffer days fetched before start_date to give pivot detection lookback context
 _BUFFER_DAYS = {
@@ -64,12 +65,17 @@ def create_swing_zone():
     if SwingZoneConfig.query.filter_by(name=data['name']).first():
         return jsonify({'error': 'A config with this name already exists'}), 409
 
+    strong_level_pct = float(data.get('strong_level_pct', 0.5))
+    if strong_level_pct not in _VALID_STRONG_PCTS:
+        return jsonify({'error': f'strong_level_pct must be one of {_VALID_STRONG_PCTS}'}), 400
+
     config = SwingZoneConfig(
         name=data['name'],
         description=data.get('description'),
         candle_size=data.get('candle_size', '4hour'),
         period_days=int(data.get('period_days', 30)),
         pivot_bars=int(data.get('pivot_bars', 5)),
+        strong_level_pct=strong_level_pct,
         created_by=int(get_jwt_identity()),
     )
     db.session.add(config)
@@ -97,6 +103,12 @@ def update_swing_zone(config_id):
     for int_field in ['period_days', 'pivot_bars']:
         if int_field in data:
             setattr(config, int_field, int(data[int_field]))
+
+    if 'strong_level_pct' in data:
+        strong_level_pct = float(data['strong_level_pct'])
+        if strong_level_pct not in _VALID_STRONG_PCTS:
+            return jsonify({'error': f'strong_level_pct must be one of {_VALID_STRONG_PCTS}'}), 400
+        config.strong_level_pct = strong_level_pct
 
     db.session.commit()
     return jsonify({'swing_zone': config.to_dict()}), 200
@@ -269,11 +281,13 @@ def get_swing_scan_history(config_id):
 @admin_swing_zones_bp.get('/api/admin/swing-zones/<int:config_id>/scan/<int:result_id>')
 @admin_required
 def get_swing_scan_result(config_id, result_id):
-    SwingZoneConfig.query.get_or_404(config_id)
+    config = SwingZoneConfig.query.get_or_404(config_id)
     result = SwingZoneScanResult.query.get_or_404(result_id)
     if result.swing_config_id != config_id:
         return jsonify({'error': 'Scan result not found'}), 404
-    return jsonify(result.to_dict()), 200
+    data = result.to_dict()
+    data['strong_level_pct'] = config.strong_level_pct
+    return jsonify(data), 200
 
 
 @admin_swing_zones_bp.get('/api/admin/swing-zones/chart-candles')
