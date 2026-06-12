@@ -65,9 +65,6 @@ def update_pattern(pattern_id):
 @admin_required
 def delete_pattern(pattern_id):
     pattern = CandlePattern.query.get_or_404(pattern_id)
-    # Unlink strategies before deleting
-    from app.models import Strategy
-    Strategy.query.filter_by(candle_pattern_id=pattern_id).update({'candle_pattern_id': None})
     db.session.delete(pattern)
     db.session.commit()
     return jsonify({'message': 'Pattern deleted'}), 200

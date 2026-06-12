@@ -1,5 +1,91 @@
 """S&R level detection — identifies swing high (resistance) and swing low (support) price points."""
 
+from datetime import datetime, timezone, timedelta
+
+from app.services.fvg_zone_detector import _aggregate_to_4h
+
+_IST = timezone(timedelta(hours=5, minutes=30))
+
+_KITE_INTERVAL = {
+    '1min': 'minute',
+    '5min': '5minute',
+    '15min': '15minute',
+    '30min': '30minute',
+    '1hour': '60minute',
+    '4hour': '60minute',
+}
+
+# Buffer days fetched before start_date to give pivot detection lookback context
+_BUFFER_DAYS = {
+    '1min': 3,
+    '5min': 5,
+    '15min': 7,
+    '30min': 10,
+    '1hour': 15,
+    '4hour': 40,
+}
+
+# Kite historical data API max range (days) per interval
+_MAX_FETCH_DAYS = {
+    '1min': 60,
+    '5min': 100,
+    '15min': 200,
+    '30min': 200,
+    '1hour': 400,
+    '4hour': 400,
+}
+
+
+def fetch_candles_for_swing_config(kite, swing_config, instrument, exchange, extra_days=0):
+    """Fetch (and, for 4hour, aggregate) candles for a SwingZoneConfig's
+    candle_size, covering `period_days` + buffer + `extra_days` of history
+    ending today.
+
+    swing_config: dict with 'candle_size' and 'period_days' keys (e.g.
+    SwingZoneConfig.to_dict()).
+    Returns a list of candle dicts {date, open, high, low, close, volume}.
+    """
+    from app.routes.customer.market import _resolve_token
+
+    candle_size = swing_config.get('candle_size', '4hour')
+    is_4h = candle_size == '4hour'
+    kite_interval = _KITE_INTERVAL.get(candle_size, '60minute')
+    period_days = int(swing_config.get('period_days', 30))
+    buffer_days = _BUFFER_DAYS.get(candle_size, 40)
+
+    total_days = period_days + extra_days + buffer_days
+    max_days = _MAX_FETCH_DAYS.get(candle_size, 400)
+    if total_days > max_days:
+        total_days = max_days
+
+    end_date = datetime.now(_IST).date()
+    fetch_from = end_date - timedelta(days=total_days)
+
+    token = _resolve_token(instrument, exchange, kite)
+    if not token:
+        return []
+
+    raw = kite.historical_data(
+        token,
+        fetch_from.strftime('%Y-%m-%d'),
+        end_date.strftime('%Y-%m-%d'),
+        kite_interval,
+    )
+
+    candles = [{
+        'date': c['date'].strftime('%Y-%m-%d %H:%M:%S'),
+        'open': c['open'],
+        'high': c['high'],
+        'low': c['low'],
+        'close': c['close'],
+        'volume': c.get('volume', 0),
+    } for c in raw]
+
+    if is_4h:
+        candles = _aggregate_to_4h(candles)
+
+    return candles
+
 
 def detect_sr_levels(candles, pivot_bars=5):
     """Detect support and resistance price levels from pivot highs and lows.

@@ -4,74 +4,17 @@ import axiosInstance from '../../api/axiosInstance'
 import {
   Card, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
+import SRChart, { NearbyLevels, StrongLevels, classifyByLtp } from '../../components/admin/SwingZoneChart'
 
-function usePatterns() {
-  const [patterns, setPatterns] = useState([])
+function useSwingZones() {
+  const [swingZones, setSwingZones] = useState([])
   useEffect(() => {
-    axiosInstance.get('/api/admin/candle-patterns')
-      .then(r => setPatterns(r.data?.patterns ?? []))
+    axiosInstance.get('/api/admin/swing-zones')
+      .then(r => setSwingZones(r.data?.swing_zones ?? []))
       .catch(() => {})
   }, [])
-  return patterns
+  return swingZones
 }
-
-// ─── Pattern Config Constants ──────────────────────────────────────────────────
-const DETECTION_CONDITION_TYPES = [
-  { value: 'bullish_candle', label: 'Bullish Candle' },
-  { value: 'bearish_candle', label: 'Bearish Candle' },
-  { value: 'gap_up', label: 'Gap Up' },
-  { value: 'gap_down', label: 'Gap Down' },
-  { value: 'bullish_engulfing', label: 'Bullish Engulfing' },
-  { value: 'bearish_engulfing', label: 'Bearish Engulfing' },
-  { value: 'hammer', label: 'Hammer' },
-  { value: 'shooting_star', label: 'Shooting Star' },
-  { value: 'doji', label: 'Doji' },
-  { value: 'inside_bar', label: 'Inside Bar' },
-  { value: 'outside_bar', label: 'Outside Bar' },
-  { value: 'consolidation_breakout', label: 'Consolidation Breakout' },
-  { value: 'consolidation_breakdown', label: 'Consolidation Breakdown' },
-]
-
-const ALL_TIMEFRAMES = ['1D', '4H', '1H', '30M', '15M', '5M', '3M']
-const EMPTY_CONDITION_ROW = { type: DETECTION_CONDITION_TYPES[0].value, value: '' }
-
-const EMPTY_INDICATOR_SETTINGS = {
-  rsi:    { enabled: false, period: 14, min: 40, max: 70 },
-  ema:    { enabled: false, period: 20, condition: 'price_above' },
-  sma:    { enabled: false, period: 50, condition: 'price_above' },
-  cpr:    { enabled: false, ascending: true, narrow: false },
-  volume: { enabled: false, period: 20, min_multiplier: 1.5 },
-}
-
-function mergeIndicatorSettings(raw) {
-  return {
-    rsi:    { ...EMPTY_INDICATOR_SETTINGS.rsi,    ...(raw?.rsi    || {}) },
-    ema:    { ...EMPTY_INDICATOR_SETTINGS.ema,    ...(raw?.ema    || {}) },
-    sma:    { ...EMPTY_INDICATOR_SETTINGS.sma,    ...(raw?.sma    || {}) },
-    cpr:    { ...EMPTY_INDICATOR_SETTINGS.cpr,    ...(raw?.cpr    || {}) },
-    volume: { ...EMPTY_INDICATOR_SETTINGS.volume, ...(raw?.volume || {}) },
-  }
-}
-
-const EMPTY_TRADE_FILTERS = {
-  time_window:       { enabled: false, from: '09:15', to: '14:00' },
-  day_filter:        { enabled: false, days: [1, 2, 3, 4, 5] },
-  trend_day_filter:  { enabled: false, max_consecutive: 3 },
-  loss_limit:        { enabled: false, max_consecutive_losses: 2 },
-  daily_trade_limit: { enabled: false, max_trades: 5 },
-}
-
-function mergeTradeFilters(raw) {
-  return {
-    time_window:       { ...EMPTY_TRADE_FILTERS.time_window,       ...(raw?.time_window       || {}) },
-    day_filter:        { ...EMPTY_TRADE_FILTERS.day_filter,        ...(raw?.day_filter        || {}) },
-    trend_day_filter:  { ...EMPTY_TRADE_FILTERS.trend_day_filter,  ...(raw?.trend_day_filter  || {}) },
-    loss_limit:        { ...EMPTY_TRADE_FILTERS.loss_limit,        ...(raw?.loss_limit        || {}) },
-    daily_trade_limit: { ...EMPTY_TRADE_FILTERS.daily_trade_limit, ...(raw?.daily_trade_limit || {}) },
-  }
-}
-
-const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 // ─── UI Components ────────────────────────────────────────────────────────────
 
@@ -84,234 +27,6 @@ function Toggle({ on, onToggle }) {
     >
       <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${on ? 'translate-x-4' : 'translate-x-1'}`} />
     </button>
-  )
-}
-
-function TimeframeMultiSelect({ selected, onChange, onSelectTimeframe }) {
-  return (
-    <div className="flex flex-wrap gap-2">
-      {ALL_TIMEFRAMES.map(tf => (
-        <button
-          key={tf}
-          type="button"
-          onClick={() => {
-            const newSelected = selected.includes(tf)
-              ? selected.filter(x => x !== tf)
-              : [...selected, tf]
-            onChange(newSelected)
-            onSelectTimeframe?.(tf)
-          }}
-          className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
-            selected.includes(tf)
-              ? 'bg-blue-600 text-white'
-              : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-          }`}
-        >
-          {tf}
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function IndicatorSettingsPanel({ settings, onChange }) {
-  function patch(key, field, value) {
-    onChange({ ...settings, [key]: { ...settings[key], [field]: value } })
-  }
-  function toggle(key) { patch(key, 'enabled', !settings[key].enabled) }
-  const inputClass = 'w-16 px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-2 focus:ring-blue-400'
-
-  return (
-    <div className="space-y-2">
-      {['rsi', 'ema', 'sma', 'cpr', 'volume'].map(key => (
-        <div key={key} className="border border-gray-200 rounded-lg px-3 py-2">
-          <div className="flex items-center gap-3">
-            <Toggle on={settings[key].enabled} onToggle={() => toggle(key)} />
-            <span className="text-sm font-medium text-gray-800">{key.toUpperCase()}</span>
-          </div>
-          {settings[key].enabled && (
-            <div className="flex flex-wrap items-center gap-4 mt-3 pl-11 text-xs">
-              {key === 'rsi' && (
-                <>
-                  <label className="flex items-center gap-1">Period <input type="number" value={settings.rsi.period} onChange={e => patch('rsi', 'period', parseInt(e.target.value))} className={inputClass} min={2} max={100} /></label>
-                  <label className="flex items-center gap-1">Min <input type="number" value={settings.rsi.min} onChange={e => patch('rsi', 'min', parseInt(e.target.value))} className={inputClass} min={0} max={100} /></label>
-                  <label className="flex items-center gap-1">Max <input type="number" value={settings.rsi.max} onChange={e => patch('rsi', 'max', parseInt(e.target.value))} className={inputClass} min={0} max={100} /></label>
-                </>
-              )}
-              {(key === 'ema' || key === 'sma') && (
-                <>
-                  <label className="flex items-center gap-1">Period <input type="number" value={settings[key].period} onChange={e => patch(key, 'period', parseInt(e.target.value))} className={inputClass} min={2} max={500} /></label>
-                  <label className="flex items-center gap-1">
-                    Condition
-                    <select value={settings[key].condition} onChange={e => patch(key, 'condition', e.target.value)} className={inputClass + ' w-32'}>
-                      <option value="price_above">Price Above</option>
-                      <option value="price_below">Price Below</option>
-                    </select>
-                  </label>
-                </>
-              )}
-              {key === 'cpr' && (
-                <>
-                  <label className="flex items-center gap-1">
-                    <input type="checkbox" checked={settings.cpr.ascending} onChange={e => patch('cpr', 'ascending', e.target.checked)} />
-                    Ascending
-                  </label>
-                  <label className="flex items-center gap-1">
-                    <input type="checkbox" checked={settings.cpr.narrow} onChange={e => patch('cpr', 'narrow', e.target.checked)} />
-                    Narrow
-                  </label>
-                </>
-              )}
-              {key === 'volume' && (
-                <>
-                  <label className="flex items-center gap-1">Period <input type="number" value={settings.volume.period} onChange={e => patch('volume', 'period', parseInt(e.target.value))} className={inputClass} min={2} max={100} /></label>
-                  <label className="flex items-center gap-1">Min Mult <input type="number" value={settings.volume.min_multiplier} onChange={e => patch('volume', 'min_multiplier', parseFloat(e.target.value))} className={inputClass} min={0.1} step={0.1} /></label>
-                </>
-              )}
-            </div>
-          )}
-        </div>
-      ))}
-    </div>
-  )
-}
-
-function TradeFiltersPanel({ filters, onChange }) {
-  function patch(key, field, value) {
-    onChange({ ...filters, [key]: { ...filters[key], [field]: value } })
-  }
-  function toggle(key) { patch(key, 'enabled', !filters[key].enabled) }
-
-  return (
-    <div className="space-y-2 text-sm">
-      {/* Time Window */}
-      <div className="border border-gray-200 rounded-lg px-3 py-2">
-        <div className="flex items-center gap-3">
-          <Toggle on={filters.time_window.enabled} onToggle={() => toggle('time_window')} />
-          <span className="font-medium text-gray-800">Time Window</span>
-        </div>
-        {filters.time_window.enabled && (
-          <div className="flex gap-3 mt-3 pl-11">
-            <label className="flex items-center gap-1">From <input type="time" value={filters.time_window.from} onChange={e => patch('time_window', 'from', e.target.value)} className="px-2 py-1 border border-gray-300 rounded" /></label>
-            <label className="flex items-center gap-1">To <input type="time" value={filters.time_window.to} onChange={e => patch('time_window', 'to', e.target.value)} className="px-2 py-1 border border-gray-300 rounded" /></label>
-          </div>
-        )}
-      </div>
-
-      {/* Day Filter */}
-      <div className="border border-gray-200 rounded-lg px-3 py-2">
-        <div className="flex items-center gap-3">
-          <Toggle on={filters.day_filter.enabled} onToggle={() => toggle('day_filter')} />
-          <span className="font-medium text-gray-800">Day Filter</span>
-        </div>
-        {filters.day_filter.enabled && (
-          <div className="flex gap-1 mt-3 pl-11 flex-wrap">
-            {DAY_LABELS.map((lbl, i) => (
-              <button
-                key={i}
-                type="button"
-                onClick={() => {
-                  const days = filters.day_filter.days
-                  const newDays = days.includes(i) ? days.filter(d => d !== i) : [...days, i]
-                  patch('day_filter', 'days', newDays)
-                }}
-                className={`px-2 py-1 rounded text-xs font-medium ${filters.day_filter.days.includes(i) ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}
-              >
-                {lbl}
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Trend Day Filter */}
-      <div className="border border-gray-200 rounded-lg px-3 py-2">
-        <div className="flex items-center gap-3">
-          <Toggle on={filters.trend_day_filter.enabled} onToggle={() => toggle('trend_day_filter')} />
-          <span className="font-medium text-gray-800">Trend Day Filter</span>
-        </div>
-        {filters.trend_day_filter.enabled && (
-          <div className="flex gap-3 mt-3 pl-11">
-            <label className="flex items-center gap-1">Max Consecutive <input type="number" value={filters.trend_day_filter.max_consecutive} onChange={e => patch('trend_day_filter', 'max_consecutive', parseInt(e.target.value))} className="w-16 px-2 py-1 border border-gray-300 rounded" min={1} max={10} /></label>
-          </div>
-        )}
-      </div>
-
-      {/* Loss Limit */}
-      <div className="border border-gray-200 rounded-lg px-3 py-2">
-        <div className="flex items-center gap-3">
-          <Toggle on={filters.loss_limit.enabled} onToggle={() => toggle('loss_limit')} />
-          <span className="font-medium text-gray-800">Loss Limit</span>
-        </div>
-        {filters.loss_limit.enabled && (
-          <div className="flex gap-3 mt-3 pl-11">
-            <label className="flex items-center gap-1">Max Losses <input type="number" value={filters.loss_limit.max_consecutive_losses} onChange={e => patch('loss_limit', 'max_consecutive_losses', parseInt(e.target.value))} className="w-16 px-2 py-1 border border-gray-300 rounded" min={1} max={10} /></label>
-          </div>
-        )}
-      </div>
-
-      {/* Daily Trade Limit */}
-      <div className="border border-gray-200 rounded-lg px-3 py-2">
-        <div className="flex items-center gap-3">
-          <Toggle on={filters.daily_trade_limit.enabled} onToggle={() => toggle('daily_trade_limit')} />
-          <span className="font-medium text-gray-800">Daily Trade Limit</span>
-        </div>
-        {filters.daily_trade_limit.enabled && (
-          <div className="flex gap-3 mt-3 pl-11">
-            <label className="flex items-center gap-1">Max Trades <input type="number" value={filters.daily_trade_limit.max_trades} onChange={e => patch('daily_trade_limit', 'max_trades', parseInt(e.target.value))} className="w-16 px-2 py-1 border border-gray-300 rounded" min={1} max={50} /></label>
-          </div>
-        )}
-      </div>
-    </div>
-  )
-}
-
-function CandlestickChart({ instrument, exchange, timeframe }) {
-  const containerRef = useRef(null)
-  const chartRef = useRef(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    if (!instrument || !timeframe || !containerRef.current) return
-
-    setLoading(true)
-    setError('')
-
-    axiosInstance.get('/api/admin/candles', {
-      params: { instrument, exchange, timeframe }
-    })
-      .then(r => {
-        const candles = r.data?.candles ?? []
-        if (!candles.length) { setError('No chart data'); return }
-
-        // Use lightweight-charts
-        if (chartRef.current) {
-          chartRef.current.remove()
-        }
-        const { createChart } = require('lightweight-charts')
-        const chart = createChart(containerRef.current, { width: containerRef.current.clientWidth, height: 300, timeScale: { timeVisible: true } })
-        const candleSeries = chart.addCandlestickSeries()
-        candleSeries.setData(candles.map(c => ({
-          time: Math.floor(c.time),
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-        })))
-        chart.timeScale().fitContent()
-        chartRef.current = chart
-      })
-      .catch(() => setError('Failed to load chart'))
-      .finally(() => setLoading(false))
-  }, [instrument, exchange, timeframe])
-
-  return (
-    <div>
-      {loading && <p className="text-xs text-gray-400">Loading chart...</p>}
-      {error && <p className="text-xs text-red-500">{error}</p>}
-      <div ref={containerRef} style={{ width: '100%', height: 300 }} />
-    </div>
   )
 }
 
@@ -500,7 +215,6 @@ function CustomerMultiSelect({ users, selected, onChange }) {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const CONDITION_TYPES = ['price_above', 'price_below', 'price_cross_up', 'price_cross_down']
 const EXCHANGES   = ['NSE', 'BSE', 'MCX']
 const ORDER_TYPES = ['MARKET', 'LIMIT']
 
@@ -711,7 +425,7 @@ export default function StrategyEdit() {
   const { id }   = useParams()
   const navigate = useNavigate()
   const formRef  = useRef(null)
-  const patterns = usePatterns()
+  const swingZones = useSwingZones()
 
   const [loading, setLoading]         = useState(true)
   const [saving, setSaving]           = useState(false)
@@ -726,22 +440,20 @@ export default function StrategyEdit() {
   const [form, setForm] = useState({
     name: '', description: '', instrument: '', exchange: 'NSE',
     order_type: 'MARKET', quantity: '', stop_loss_pct: '', take_profit_pct: '',
-    entry_type: 'price_above', entry_value: '',
-    exit_type: 'price_below', exit_value: '',
-    candle_pattern_id: '',
+    swing_zone_config_id: '',
     is_active: true,
     option_enabled: false,
     option_underlying: 'NIFTY',
     option_strike_selection: 'ATM',
     option_expiry: 'current_week',
-    timeframes: [...ALL_TIMEFRAMES],
-    entry_conditions_rows: [{ ...EMPTY_CONDITION_ROW }],
-    indicator_settings: { ...EMPTY_INDICATOR_SETTINGS },
-    trade_filters: { ...EMPTY_TRADE_FILTERS },
   })
   const [slRulesRows, setSlRulesRows]         = useState([])
   const [targetRulesRows, setTargetRulesRows] = useState([])
-  const [activeChartTimeframe, setActiveChartTimeframe] = useState(null)
+
+  const [swingPreview, setSwingPreview]             = useState(null)
+  const [swingPreviewLoading, setSwingPreviewLoading] = useState(false)
+  const [swingPreviewErr, setSwingPreviewErr]       = useState('')
+  const swingPreviewDebounceRef = useRef(null)
 
   function fetchPrice(symbol, exchange) {
     if (!symbol) { setCurrentPrice(null); return }
@@ -764,10 +476,6 @@ export default function StrategyEdit() {
       if (!s) { navigate('/admin/strategies'); return }
       const instrument = s.instrument ?? ''
       const exchange   = s.exchange ?? 'NSE'
-      const rawConds = s.entry_conditions
-      const condRows = Array.isArray(rawConds) && rawConds.length > 0
-        ? rawConds.map(c => ({ type: c.type ?? DETECTION_CONDITION_TYPES[0].value, value: String(c.value ?? '') }))
-        : [{ ...EMPTY_CONDITION_ROW }]
       setForm({
         name:            s.name ?? '',
         description:     s.description ?? '',
@@ -777,20 +485,12 @@ export default function StrategyEdit() {
         quantity:        String(s.quantity ?? ''),
         stop_loss_pct:   String(s.stop_loss_pct ?? ''),
         take_profit_pct: String(s.take_profit_pct ?? ''),
-        entry_type:        s.entry_condition?.type ?? 'price_above',
-        entry_value:       String(s.entry_condition?.value ?? ''),
-        exit_type:         s.exit_condition?.type ?? 'price_below',
-        exit_value:        String(s.exit_condition?.value ?? ''),
-        candle_pattern_id: s.candle_pattern_id ? String(s.candle_pattern_id) : '',
+        swing_zone_config_id: s.swing_zone_config_id ? String(s.swing_zone_config_id) : '',
         is_active:         s.is_active ?? true,
         option_enabled:           !!s.option_config?.enabled,
         option_underlying:        s.option_config?.underlying        ?? 'NIFTY',
         option_strike_selection:  s.option_config?.strike_selection  ?? 'ATM',
         option_expiry:            s.option_config?.expiry            ?? 'current_week',
-        timeframes:         Array.isArray(s.timeframes) && s.timeframes.length > 0 ? s.timeframes : [...ALL_TIMEFRAMES],
-        entry_conditions_rows: condRows,
-        indicator_settings: mergeIndicatorSettings(s.indicator_settings),
-        trade_filters:      mergeTradeFilters(s.trade_filters),
       })
       setSlRulesRows(rulesObjToRows(s.stop_loss_rules, SL_PARAM_MAP))
       setTargetRulesRows(rulesObjToRows(s.target_rules, TARGET_PARAM_MAP))
@@ -808,42 +508,54 @@ export default function StrategyEdit() {
 
   function set(k) { return e => setForm(f => ({ ...f, [k]: e.target.value })) }
 
-  function setCondRow(idx, key, val) {
-    setForm(f => {
-      const rows = f.entry_conditions_rows.map((r, i) => i === idx ? { ...r, [key]: val } : r)
-      return { ...f, entry_conditions_rows: rows }
-    })
-  }
+  // Effective instrument/exchange used for both the live S&R preview and submit —
+  // when options are enabled, the underlying drives the instrument instead of
+  // the (hidden) instrument field.
+  const optMeta = UNDERLYING_DISPLAY[form.option_underlying] ?? UNDERLYING_DISPLAY.NIFTY
+  const previewInstrument = form.option_enabled ? optMeta.symbol   : form.instrument.toUpperCase()
+  const previewExchange   = form.option_enabled ? optMeta.exchange : form.exchange
+  const selectedSwingZone = swingZones.find(z => String(z.id) === String(form.swing_zone_config_id))
 
-  function addCondRow() {
-    setForm(f => ({ ...f, entry_conditions_rows: [...f.entry_conditions_rows, { ...EMPTY_CONDITION_ROW }] }))
-  }
-
-  function removeCondRow(idx) {
-    setForm(f => ({
-      ...f,
-      entry_conditions_rows: f.entry_conditions_rows.length > 1
-        ? f.entry_conditions_rows.filter((_, i) => i !== idx)
-        : f.entry_conditions_rows,
-    }))
-  }
+  useEffect(() => {
+    if (!previewInstrument || !form.swing_zone_config_id) {
+      setSwingPreview(null)
+      setSwingPreviewErr('')
+      return
+    }
+    clearTimeout(swingPreviewDebounceRef.current)
+    swingPreviewDebounceRef.current = setTimeout(() => {
+      setSwingPreviewLoading(true)
+      setSwingPreviewErr('')
+      axiosInstance.get('/api/admin/strategies/swing-preview', {
+        params: {
+          instrument: previewInstrument,
+          exchange: previewExchange,
+          swing_zone_config_id: form.swing_zone_config_id,
+        },
+      })
+        .then(r => setSwingPreview(r.data))
+        .catch(ex => {
+          setSwingPreview(null)
+          setSwingPreviewErr(ex.response?.data?.error ?? 'Failed to load preview')
+        })
+        .finally(() => setSwingPreviewLoading(false))
+    }, 300)
+  }, [previewInstrument, previewExchange, form.swing_zone_config_id])
 
   async function handleSubmit(e) {
     e.preventDefault()
     // When options are enabled the instrument field is hidden and auto-filled
     // from the underlying selection, so don't require it from the user.
     const required = form.option_enabled
-      ? ['name', 'quantity', 'stop_loss_pct', 'take_profit_pct', 'entry_value']
-      : ['name', 'instrument', 'quantity', 'stop_loss_pct', 'take_profit_pct', 'entry_value']
+      ? ['name', 'quantity', 'stop_loss_pct', 'take_profit_pct']
+      : ['name', 'instrument', 'quantity', 'stop_loss_pct', 'take_profit_pct']
     const missing = required.filter(k => !form[k])
     if (missing.length) { setErr(`Required: ${missing.join(', ')}`); return }
 
     setSaving(true); setErr(''); setSaved(false)
-    const optMeta = UNDERLYING_DISPLAY[form.option_underlying] ?? UNDERLYING_DISPLAY.NIFTY
-    const effectiveInstrument = form.option_enabled ? optMeta.symbol  : form.instrument.toUpperCase()
-    const effectiveExchange   = form.option_enabled ? optMeta.exchange : form.exchange
+    const effectiveInstrument = previewInstrument
+    const effectiveExchange   = previewExchange
     try {
-      const validCondRows = form.entry_conditions_rows.filter(r => r.type && r.value !== '')
       await axiosInstance.put(`/api/admin/strategies/${id}`, {
         name:            form.name,
         description:     form.description,
@@ -855,13 +567,7 @@ export default function StrategyEdit() {
         take_profit_pct: parseFloat(form.take_profit_pct),
         stop_loss_rules:   rowsToRulesObj(slRulesRows),
         target_rules:      rowsToRulesObj(targetRulesRows),
-        entry_condition:   { type: form.entry_type, value: parseFloat(form.entry_value) },
-        exit_condition:    form.exit_value ? { type: form.exit_type, value: parseFloat(form.exit_value) } : null,
-        timeframes:        form.timeframes.length > 0 ? form.timeframes : null,
-        entry_conditions:  validCondRows.map(r => ({ type: r.type, value: parseFloat(r.value) })),
-        indicator_settings: form.indicator_settings,
-        trade_filters:     form.trade_filters,
-        candle_pattern_id: form.candle_pattern_id ? parseInt(form.candle_pattern_id) : null,
+        swing_zone_config_id: form.swing_zone_config_id ? parseInt(form.swing_zone_config_id) : null,
         option_config: form.option_enabled
           ? { enabled: true, underlying: form.option_underlying,
               strike_selection: form.option_strike_selection, expiry: form.option_expiry }
@@ -1030,97 +736,54 @@ export default function StrategyEdit() {
               <Input value={form.description} onChange={set('description')} placeholder="Optional" />
             </FormField>
 
-            <FormField label="Candle Pattern">
-              <Select value={form.candle_pattern_id} onChange={set('candle_pattern_id')}>
-                <option value="">— None —</option>
-                {patterns.map(p => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.direction})
-                  </option>
-                ))}
-              </Select>
-            </FormField>
-
-            {/* Pattern Execution Config */}
+            {/* Swing Level */}
             <div className="col-span-2 mt-2 pt-2 border-t border-gray-200">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Pattern Execution Config</p>
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Swing Level Strategy</p>
 
-              {/* Timeframes */}
-              <FormField label="Timeframes">
-                <TimeframeMultiSelect
-                  selected={form.timeframes}
-                  onChange={tfs => setForm(f => ({ ...f, timeframes: tfs }))}
-                  onSelectTimeframe={setActiveChartTimeframe}
-                />
+              <FormField label="Swing Zone Config" hint="Support & resistance levels are recomputed live from this config on every tick.">
+                <Select value={form.swing_zone_config_id} onChange={set('swing_zone_config_id')}>
+                  <option value="">— None —</option>
+                  {swingZones.map(z => (
+                    <option key={z.id} value={z.id}>
+                      {z.name} ({z.candle_size}, {z.period_days}d)
+                    </option>
+                  ))}
+                </Select>
               </FormField>
 
-              {/* Detection Conditions */}
-              <div className="mb-3">
-                <p className="text-xs text-gray-600 mb-2">Detection Conditions</p>
-                <div className="space-y-2">
-                  {form.entry_conditions_rows.map((row, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <select
-                        value={row.type}
-                        onChange={e => setCondRow(idx, 'type', e.target.value)}
-                        className="flex-1 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                      >
-                        {DETECTION_CONDITION_TYPES.map(t => (
-                          <option key={t.value} value={t.value}>{t.label}</option>
-                        ))}
-                      </select>
-                      <input
-                        type="number"
-                        value={row.value}
-                        onChange={e => setCondRow(idx, 'value', e.target.value)}
-                        placeholder="Value"
-                        className="w-32 px-3 py-1.5 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              {form.swing_zone_config_id && (
+                <div className="mt-3">
+                  {swingPreviewLoading && <p className="text-xs text-gray-400 mb-2">Loading preview…</p>}
+                  {swingPreviewErr && <p className="text-xs text-red-500 mb-2">{swingPreviewErr}</p>}
+                  {swingPreview && (
+                    <>
+                      <NearbyLevels levels={classifyByLtp(swingPreview.levels, swingPreview.ltp)} currentPrice={swingPreview.ltp} />
+                      <StrongLevels levels={classifyByLtp(swingPreview.levels, swingPreview.ltp)} pct={selectedSwingZone?.strong_level_pct} />
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {swingPreview.last_level && (
+                          <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${swingPreview.direction === 'bullish' ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'}`}>
+                            Last Level: {swingPreview.last_level.type === 'RESISTANCE' ? 'R' : 'S'} {swingPreview.last_level.price}
+                            <span className="font-normal">→ {swingPreview.direction === 'bullish' ? 'Buy' : 'Sell'} bias</span>
+                          </span>
+                        )}
+                        <span className={`inline-flex items-center gap-1.5 text-xs font-semibold px-2.5 py-1 rounded-full border ${swingPreview.signal ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-gray-50 text-gray-500 border-gray-200'}`}>
+                          Breakout: {swingPreview.signal ? `${swingPreview.signal.direction.toUpperCase()} @ ${swingPreview.signal.level_price}` : 'pending'}
+                        </span>
+                      </div>
+                      <SRChart
+                        levels={swingPreview.levels}
+                        instrument={previewInstrument}
+                        exchange={previewExchange}
+                        candleSize={selectedSwingZone?.candle_size}
+                        periodFrom={swingPreview.period?.from}
+                        periodTo={swingPreview.period?.to}
+                        strongPct={selectedSwingZone?.strong_level_pct}
+                        currentPrice={swingPreview.ltp}
                       />
-                      <button
-                        type="button"
-                        onClick={() => removeCondRow(idx)}
-                        disabled={form.entry_conditions_rows.length === 1}
-                        className="text-red-400 hover:text-red-600 disabled:opacity-30 text-lg"
-                      >×</button>
-                    </div>
-                  ))}
-                </div>
-                <button
-                  type="button"
-                  onClick={addCondRow}
-                  className="mt-2 text-xs text-blue-600 hover:underline"
-                >+ Add condition</button>
-              </div>
-
-              {/* Chart */}
-              {form.instrument && activeChartTimeframe && (
-                <div className="mb-3">
-                  <p className="text-xs text-gray-600 mb-2">Chart Preview — {activeChartTimeframe} (last 10 days)</p>
-                  <CandlestickChart
-                    instrument={form.instrument.toUpperCase()}
-                    exchange={form.exchange}
-                    timeframe={activeChartTimeframe}
-                  />
+                    </>
+                  )}
                 </div>
               )}
-
-              {/* Indicator Settings */}
-              <div className="mb-3">
-                <p className="text-xs text-gray-600 mb-2">Indicator Settings</p>
-                <IndicatorSettingsPanel
-                  settings={form.indicator_settings}
-                  onChange={s => setForm(f => ({ ...f, indicator_settings: s }))}
-                />
-              </div>
-
-              {/* Trade Filters */}
-              <div className="mb-3">
-                <p className="text-xs text-gray-600 mb-2">Trade Filters</p>
-                <TradeFiltersPanel
-                  filters={form.trade_filters}
-                  onChange={f => setForm(prev => ({ ...prev, trade_filters: f }))}
-                />
-              </div>
             </div>
 
             <FormField label="Stop Loss %">
@@ -1166,31 +829,6 @@ export default function StrategyEdit() {
             {targetRulesRows.length === 0 && (
               <p className="text-xs text-gray-400 mb-1">No rules configured — using Take Profit % only.</p>
             )}
-          </div>
-
-          {/* Conditions */}
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2 mt-1">Entry Condition</p>
-          <div className="grid grid-cols-2 gap-x-6 mb-2">
-            <FormField label="Type">
-              <Select value={form.entry_type} onChange={set('entry_type')}>
-                {CONDITION_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-              </Select>
-            </FormField>
-            <FormField label="Value" hint="Price threshold (e.g. 19500)">
-              <Input type="number" step="0.01" value={form.entry_value} onChange={set('entry_value')} required />
-            </FormField>
-          </div>
-
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Exit Condition (optional)</p>
-          <div className="grid grid-cols-2 gap-x-6 mb-6">
-            <FormField label="Type">
-              <Select value={form.exit_type} onChange={set('exit_type')}>
-                {CONDITION_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-              </Select>
-            </FormField>
-            <FormField label="Value">
-              <Input type="number" step="0.01" value={form.exit_value} onChange={set('exit_value')} placeholder="Leave blank to use SL/TP only" />
-            </FormField>
           </div>
 
           {/* Assign customers */}

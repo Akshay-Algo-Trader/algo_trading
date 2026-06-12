@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import axiosInstance from '../../api/axiosInstance'
 import {
   Card, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
 import InstrumentSearch from '../../components/admin/InstrumentSearch'
-import SRChart, { NearbyLevels, StrongLevels, findNearestLevels, findStrongLevels, strongClusterOthers, STRONG_LEVEL_PCT_OPTIONS } from '../../components/admin/SwingZoneChart'
+import SRChart, { NearbyLevels, StrongLevels, findNearestLevels, findStrongLevels, strongClusterOthers, classifyByLtp, STRONG_LEVEL_PCT_OPTIONS } from '../../components/admin/SwingZoneChart'
 
 const PERIOD_OPTIONS = [1, 7, 10, 30, 60, 90]
 const SIZE_LABELS = { '1min': '1 Min', '5min': '5 Min', '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
@@ -18,6 +18,7 @@ function fmt(dt) {
 export default function SwingZoneEdit() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   const [form, setForm] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -28,19 +29,23 @@ export default function SwingZoneEdit() {
 
   const today = new Date().toISOString().slice(0, 10)
 
-  // Scan state
-  const [instrument, setInstrument] = useState('')
-  const [exchange, setExchange] = useState('NSE')
+  // Scan state — prefillable via ?instrument=&exchange=&start_date=&end_date=
+  // (swing level scanner click-through passes its run's exact window so the
+  // chart reproduces the data the scanner matched on)
+  const [instrument, setInstrument] = useState(() => (searchParams.get('instrument') ?? '').toUpperCase())
+  const [exchange, setExchange] = useState(() => searchParams.get('exchange') ?? 'NSE')
+  const [autoScanned, setAutoScanned] = useState(false)
   const [startDate, setStartDate] = useState(() =>
-    new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+    searchParams.get('start_date') || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
   )
-  const [endDate, setEndDate] = useState(today)
+  const [endDate, setEndDate] = useState(() => searchParams.get('end_date') || today)
 
   useEffect(() => {
+    if (searchParams.get('start_date')) return
     if (form?.period_days) {
       setStartDate(new Date(Date.now() - form.period_days * 86400000).toISOString().slice(0, 10))
     }
-  }, [form?.period_days])
+  }, [form?.period_days]) // eslint-disable-line react-hooks/exhaustive-deps
   const [scanning, setScanning] = useState(false)
   const [scanError, setScanError] = useState('')
   const [scanResult, setScanResult] = useState(null)
@@ -99,8 +104,20 @@ export default function SwingZoneEdit() {
     }
   }
 
+  // Auto-run the scan when arriving from the swing level scanner results
+  useEffect(() => {
+    if (form && !autoScanned && searchParams.get('instrument')) {
+      setAutoScanned(true)
+      runScan()
+    }
+  }, [form]) // eslint-disable-line react-hooks/exhaustive-deps
+
   async function handleScan(e) {
     e.preventDefault()
+    runScan()
+  }
+
+  async function runScan() {
     if (!instrument.trim()) { setScanError('Instrument is required'); return }
     setScanning(true); setScanError(''); setScanResult(null); setSummary(null)
     try {
@@ -137,7 +154,7 @@ export default function SwingZoneEdit() {
     )
   }
 
-  const levels = scanResult?.levels_detected ?? []
+  const levels = classifyByLtp(scanResult?.levels_detected ?? [], currentPrice)
   const resistance = levels.filter(l => l.type === 'RESISTANCE').sort((a, b) => String(a.date).localeCompare(String(b.date)))
   const support = levels.filter(l => l.type === 'SUPPORT').sort((a, b) => String(a.date).localeCompare(String(b.date)))
   const { nearestResistance, nearestSupport } = findNearestLevels(levels, currentPrice)
@@ -242,6 +259,7 @@ export default function SwingZoneEdit() {
                 <option value="BSE">BSE</option>
                 <option value="NFO">NFO</option>
                 <option value="NSE_INDICES">NSE Indices</option>
+                <option value="MCX">MCX</option>
               </Select>
             </FormField>
           </div>
@@ -365,6 +383,8 @@ export default function SwingZoneEdit() {
             candleSize={scanResult.candle_size}
             periodFrom={scanResult.period.from}
             periodTo={scanResult.period.to}
+            strongPct={parseFloat(form.strong_level_pct)}
+            currentPrice={currentPrice}
           />
         </Card>
       )}

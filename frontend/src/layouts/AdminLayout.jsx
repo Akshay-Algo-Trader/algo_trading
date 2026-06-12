@@ -48,6 +48,11 @@ const NAV_ITEMS = [
     icon: <Icon d="M3 17l4-8 4 4 4-6 4 10" />,
   },
   {
+    path: '/admin/swing-scan',
+    label: 'Scan Swing Levels',
+    icon: <Icon d="M21 21l-4.35-4.35M11 17a6 6 0 100-12 6 6 0 000 12zM8 11l2-2 2 2 2-3" />,
+  },
+  {
     path: '/admin/kite-config',
     label: 'Kite Config',
     icon: <Icon d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z" />,
@@ -83,6 +88,7 @@ const BREADCRUMB_MAP = {
   zones: 'Zones',
   'fvg-zones': 'FVG Zones',
   'swing-zones': 'Swing Levels',
+  'swing-scan': 'Scan Swing Levels',
   'kite-config': 'Kite Config',
   backtest: 'Backtest',
   sessions: 'Sessions',

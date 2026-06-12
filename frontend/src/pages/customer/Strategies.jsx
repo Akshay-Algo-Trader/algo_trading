@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import axiosInstance from '../../api/axiosInstance'
 import { useTradingStore } from '../../store/tradingStore'
 import { useStrategyExecutor } from '../../hooks/useStrategyExecutor'
@@ -194,7 +194,7 @@ function fmt(n) {
 
 // ── Execution Engine panel ────────────────────────────────────────────────────
 function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected, planState, onStop }) {
-  const dir = strategy.candle_pattern?.direction === 'bearish' ? 'bearish' : 'bullish'
+  const dir = planState?.direction === 'bearish' ? 'bearish' : 'bullish'
   const pnlPct = entryPrice != null && ltp != null
     ? (dir === 'bearish'
         ? (entryPrice - ltp) / entryPrice * 100
@@ -207,6 +207,23 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected
     ? entryPrice * (1 + (dir === 'bearish' ? -1 : 1) * strategy.take_profit_pct / 100)
     : null)
 
+  // Logs arrive newest-first; show oldest-first (chronological) and keep the
+  // view pinned to the latest entry unless the user has scrolled up to read history.
+  const logContainerRef = useRef(null)
+  const autoScrollRef = useRef(true)
+
+  function handleLogScroll(e) {
+    const el = e.currentTarget
+    autoScrollRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40
+  }
+
+  useEffect(() => {
+    const el = logContainerRef.current
+    if (el && autoScrollRef.current) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [logs])
+
   return (
     <div className="bg-white rounded-xl border border-blue-200 shadow-sm p-5 space-y-4">
       {/* Header */}
@@ -217,14 +234,14 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected
             <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${PHASE_STYLE[phase]}`}>
               {PHASE_LABEL[phase]}
             </span>
-            {strategy.candle_pattern && (
+            {strategy.swing_zone_config && (
               <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${patternDetected ? 'bg-green-100 text-green-700' : 'bg-yellow-100 text-yellow-700'}`}>
-                {patternDetected ? `Pattern: ${strategy.candle_pattern.name} ✓` : `Awaiting pattern: ${strategy.candle_pattern.name}`}
+                {patternDetected ? `Breakout: ${strategy.swing_zone_config.name} ✓` : `Awaiting breakout: ${strategy.swing_zone_config.name}`}
               </span>
             )}
           </div>
           <p className="text-xs text-gray-500 mt-0.5">
-            {strategy.name} · {strategy.instrument} ({strategy.exchange}) · refreshes every 15s
+            {strategy.name} · {strategy.instrument} ({strategy.exchange}) · refreshes every 3s
           </p>
           {planState?.resolvedContract && (
             <p className="text-xs font-semibold text-orange-600 mt-0.5">
@@ -321,10 +338,14 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected
       {/* Execution log */}
       <div>
         <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Execution Log</p>
-        <div className="bg-gray-50 rounded-lg p-3 max-h-48 overflow-y-auto space-y-1 font-mono">
+        <div
+          ref={logContainerRef}
+          onScroll={handleLogScroll}
+          className="bg-gray-50 rounded-lg p-3 max-h-48 overflow-y-auto space-y-1 font-mono"
+        >
           {logs.length === 0 ? (
             <p className="text-xs text-gray-400">Waiting for first price tick…</p>
-          ) : logs.map((l, i) => (
+          ) : [...logs].reverse().map((l, i) => (
             <p key={i} className={`text-xs ${LOG_CLS[l.type] || 'text-gray-500'}`}>
               <span className="text-gray-400 select-none">{l.ts} </span>
               {l.msg}
@@ -406,28 +427,15 @@ function StrategyCard({ strategy, activeSessionId, onActivate, activating, mode,
         </div>
       </div>
 
-      {strategy.candle_pattern && (
-        <div className={`rounded-lg px-3 py-2 flex items-center gap-2 ${strategy.candle_pattern.direction === 'bullish' ? 'bg-green-50 border border-green-100' : 'bg-red-50 border border-red-100'}`}>
-          <svg className={`w-3.5 h-3.5 flex-shrink-0 ${strategy.candle_pattern.direction === 'bullish' ? 'text-green-600' : 'text-red-600'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      {strategy.swing_zone_config && (
+        <div className="rounded-lg px-3 py-2 flex items-center gap-2 bg-gray-50 border border-gray-100">
+          <svg className="w-3.5 h-3.5 flex-shrink-0 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />
           </svg>
           <div className="min-w-0">
-            <p className={`text-xs font-semibold ${strategy.candle_pattern.direction === 'bullish' ? 'text-green-700' : 'text-red-700'}`}>
-              {strategy.candle_pattern.name}
-            </p>
-            {strategy.candle_pattern.market && (
-              <p className="text-xs text-gray-500">{strategy.candle_pattern.market}</p>
-            )}
+            <p className="text-xs font-semibold text-gray-700">{strategy.swing_zone_config.name}</p>
+            <p className="text-xs text-gray-500">{strategy.swing_zone_config.candle_size} · {strategy.swing_zone_config.period_days}d</p>
           </div>
-        </div>
-      )}
-
-      {strategy.entry_condition && (
-        <div>
-          <p className="text-xs text-gray-400 font-medium mb-1">Entry Condition</p>
-          <p className="bg-gray-50 rounded-lg px-3 py-2 text-xs text-gray-700 font-mono">
-            {strategy.entry_condition.type?.replace(/_/g, ' ')} @ {strategy.entry_condition.value}
-          </p>
         </div>
       )}
 

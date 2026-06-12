@@ -22,6 +22,7 @@ import SwingZones        from './pages/admin/SwingZones'
 import SwingZoneNew      from './pages/admin/SwingZoneNew'
 import SwingZoneEdit     from './pages/admin/SwingZoneEdit'
 import SwingZoneScanDetail from './pages/admin/SwingZoneScanDetail'
+import SwingLevelScanner from './pages/admin/SwingLevelScanner'
 import KiteConfig  from './pages/admin/KiteConfig'
 import Sessions    from './pages/admin/Sessions'
 import Orders      from './pages/admin/Orders'
@@ -82,6 +83,7 @@ export default function App() {
           <Route path="swing-zones/new"                   element={<SwingZoneNew />} />
           <Route path="swing-zones/:id/edit"              element={<SwingZoneEdit />} />
           <Route path="swing-zones/:id/scan/:resultId"    element={<SwingZoneScanDetail />} />
+          <Route path="swing-scan"                         element={<SwingLevelScanner />} />
           <Route path="kite-config" element={<KiteConfig />} />
           <Route path="backtest"    element={<AdminBacktest />} />
           <Route path="sessions"    element={<Sessions />} />

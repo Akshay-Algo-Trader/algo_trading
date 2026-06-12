@@ -1,9 +1,12 @@
+import logging
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt_identity
-from datetime import timezone, timedelta
+from datetime import datetime, timezone, timedelta
 from app.extensions import db
 from app.models import Strategy, UserStrategy, Exchange, OrderType, User
 from app.routes.decorators import admin_required
+
+logger = logging.getLogger(__name__)
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -306,12 +309,82 @@ def list_strategies():
     return jsonify({'strategies': [s.to_dict() for s in strategies]}), 200
 
 
+@admin_strategies_bp.get('/api/admin/strategies/swing-preview')
+@admin_required
+def swing_preview():
+    from app.models import SwingZoneConfig, KiteConfig
+    from app.services.encryption import decrypt
+    from app.services.swing_zone_detector import detect_sr_levels, fetch_candles_for_swing_config
+    from app.services.swing_breakout import find_last_level, find_strong_levels, evaluate_breakout
+
+    instrument = request.args.get('instrument', '').strip().upper()
+    exchange = request.args.get('exchange', 'NSE').upper()
+    swing_zone_config_id = request.args.get('swing_zone_config_id')
+
+    if not instrument:
+        return jsonify({'error': 'instrument required'}), 400
+    if not swing_zone_config_id:
+        return jsonify({'error': 'swing_zone_config_id required'}), 400
+
+    swing_config = SwingZoneConfig.query.get_or_404(int(swing_zone_config_id))
+
+    user_id = int(get_jwt_identity())
+    kite_cfg = KiteConfig.query.filter_by(user_id=user_id).first()
+    if not (kite_cfg and kite_cfg.is_connected and kite_cfg.access_token_encrypted):
+        kite_cfg = KiteConfig.query.filter_by(is_connected=True).first()
+    if not (kite_cfg and kite_cfg.access_token_encrypted):
+        return jsonify({'error': 'No connected Kite account available'}), 400
+
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=decrypt(kite_cfg.api_key_encrypted))
+        kite.set_access_token(decrypt(kite_cfg.access_token_encrypted))
+
+        candles = fetch_candles_for_swing_config(kite, swing_config.to_dict(), instrument, exchange)
+        if len(candles) < swing_config.pivot_bars * 2 + 1:
+            return jsonify({'error': 'Not enough historical data for this instrument'}), 400
+
+        # Fetched candles include extra buffer days for pivot-detection
+        # context — trim to the configured Lookback Period so the levels
+        # and chart shown to the user match the swing config exactly.
+        start_date = (datetime.now(_IST) - timedelta(days=swing_config.period_days)).strftime('%Y-%m-%d')
+        report_candles = [c for c in candles if c['date'][:10] >= start_date]
+        if not report_candles:
+            report_candles = candles
+
+        levels = detect_sr_levels(report_candles, pivot_bars=swing_config.pivot_bars)
+        last_level = find_last_level(levels)
+        strong = find_strong_levels(levels, swing_config.strong_level_pct)
+
+        prev_close = candles[-2]['close']
+        last_close = candles[-1]['close']
+        signal = evaluate_breakout(levels, swing_config.strong_level_pct, prev_close, last_close)
+
+        direction = None
+        if last_level:
+            direction = 'bullish' if last_level['type'] == 'RESISTANCE' else 'bearish'
+
+        return jsonify({
+            'levels': levels,
+            'last_level': last_level,
+            'strong_resistance': strong['strong_resistance'],
+            'strong_support': strong['strong_support'],
+            'signal': signal,
+            'direction': direction,
+            'ltp': last_close,
+            'period': {'from': report_candles[0]['date'], 'to': report_candles[-1]['date']},
+        }), 200
+    except Exception as exc:
+        logger.exception("Swing preview failed instrument=%s: %s", instrument, exc)
+        return jsonify({'error': str(exc)}), 500
+
+
 @admin_strategies_bp.post('/api/admin/strategies')
 @admin_required
 def create_strategy():
     data = request.get_json() or {}
     required = ['name', 'instrument', 'exchange', 'order_type', 'quantity',
-                'entry_condition', 'exit_condition', 'stop_loss_pct', 'take_profit_pct']
+                'stop_loss_pct', 'take_profit_pct']
     missing = [f for f in required if f not in data]
     if missing:
         return jsonify({'error': f'Missing fields: {", ".join(missing)}'}), 400
@@ -329,17 +402,11 @@ def create_strategy():
         exchange=exchange,
         order_type=order_type,
         quantity=int(data['quantity']),
-        entry_condition=data['entry_condition'],
-        exit_condition=data['exit_condition'],
         stop_loss_pct=float(data['stop_loss_pct']),
         take_profit_pct=float(data['take_profit_pct']),
         stop_loss_rules=data.get('stop_loss_rules'),
         target_rules=data.get('target_rules'),
-        timeframes=data.get('timeframes'),
-        entry_conditions=data.get('entry_conditions'),
-        indicator_settings=data.get('indicator_settings'),
-        trade_filters=data.get('trade_filters'),
-        candle_pattern_id=data.get('candle_pattern_id'),
+        swing_zone_config_id=data.get('swing_zone_config_id'),
         option_config=data.get('option_config'),
         created_by=int(get_jwt_identity())
     )
@@ -355,10 +422,9 @@ def update_strategy(strategy_id):
     data = request.get_json() or {}
 
     scalar_fields = ['name', 'description', 'instrument', 'quantity',
-                     'entry_condition', 'exit_condition', 'stop_loss_pct',
-                     'take_profit_pct', 'stop_loss_rules', 'target_rules',
-                     'timeframes', 'entry_conditions', 'indicator_settings', 'trade_filters',
-                     'candle_pattern_id', 'option_config', 'is_active']
+                     'stop_loss_pct', 'take_profit_pct', 'stop_loss_rules',
+                     'target_rules', 'swing_zone_config_id', 'option_config',
+                     'is_active']
     for field in scalar_fields:
         if field in data:
             setattr(strategy, field, data[field])

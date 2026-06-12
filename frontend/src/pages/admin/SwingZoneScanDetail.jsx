@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import axiosInstance from '../../api/axiosInstance'
 import { Card, Btn, PageHeader } from '../../components/admin/TableHelpers'
-import SRChart, { NearbyLevels, StrongLevels, findNearestLevels, findStrongLevels, strongClusterOthers } from '../../components/admin/SwingZoneChart'
+import SRChart, { NearbyLevels, StrongLevels, findNearestLevels, findStrongLevels, strongClusterOthers, classifyByLtp } from '../../components/admin/SwingZoneChart'
 
 const SIZE_LABELS = { '1min': '1 Min', '5min': '5 Min', '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
 
@@ -52,7 +52,7 @@ export default function SwingZoneScanDetail() {
     )
   }
 
-  const levels = result.levels_detected ?? []
+  const levels = classifyByLtp(result.levels_detected ?? [], currentPrice)
   const resistance = levels.filter(l => l.type === 'RESISTANCE').sort((a, b) => String(a.date).localeCompare(String(b.date)))
   const support = levels.filter(l => l.type === 'SUPPORT').sort((a, b) => String(a.date).localeCompare(String(b.date)))
   const { nearestResistance, nearestSupport } = findNearestLevels(levels, currentPrice)
@@ -170,6 +170,8 @@ export default function SwingZoneScanDetail() {
             candleSize={result.candle_size}
             periodFrom={result.period.from}
             periodTo={result.period.to}
+            strongPct={result.strong_level_pct}
+            currentPrice={currentPrice}
           />
         </Card>
       )}
