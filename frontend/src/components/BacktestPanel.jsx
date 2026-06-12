@@ -18,7 +18,6 @@ const EXIT_LABELS = {
   partial_then_sl:       { text: 'Partial → SL',    cls: 'bg-orange-100 text-orange-700' },
   first_candle_violated: { text: 'Structure Stop',  cls: 'bg-red-100 text-red-700'    },
   end_of_period:         { text: 'Period End',      cls: 'bg-gray-100 text-gray-600'  },
-  exit_condition:        { text: 'Exit Cond.',      cls: 'bg-blue-100 text-blue-700'  },
 }
 
 const PAGE_SIZE = 10
@@ -152,9 +151,11 @@ export default function BacktestPanel({ result, error, loading, emptyHint = 'Sel
             {result.period.from} → {result.period.to} ({result.candles_analyzed} trading days)
           </span>
         </div>
-        <span className={`text-xs font-semibold px-2 py-1 rounded-full ${result.strategy.candle_pattern?.direction === 'bearish' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-          {(result.strategy.candle_pattern?.direction || 'bullish').toUpperCase()}
-        </span>
+        {trades.length > 0 && (
+          <span className={`text-xs font-semibold px-2 py-1 rounded-full ${trades[0].direction === 'BEARISH' ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
+            {trades[0].direction}
+          </span>
+        )}
       </div>
 
       {/* Summary stats */}

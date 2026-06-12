@@ -11,6 +11,7 @@ class SwingZoneConfig(db.Model):
     candle_size = db.Column(db.String(20), nullable=False, default='4hour')
     period_days = db.Column(db.Integer, nullable=False, default=30)
     pivot_bars = db.Column(db.Integer, nullable=False, default=5)
+    strong_level_pct = db.Column(db.Float, nullable=False, default=0.5)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
@@ -25,6 +26,7 @@ class SwingZoneConfig(db.Model):
             'candle_size': self.candle_size,
             'period_days': self.period_days,
             'pivot_bars': self.pivot_bars,
+            'strong_level_pct': self.strong_level_pct,
             'is_active': self.is_active,
             'created_by': self.created_by,
             'created_at': self.created_at.isoformat(),

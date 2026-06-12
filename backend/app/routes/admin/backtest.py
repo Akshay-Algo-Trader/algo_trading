@@ -6,79 +6,26 @@ any connected KiteConfig if the admin hasn't connected Kite themselves (the
 backtest just needs market history, not order placement)."""
 
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt_identity
 
-from app.models import CandlePattern, KiteConfig
+from app.models import KiteConfig
 from app.models.strategy import Strategy
 from app.routes.decorators import admin_required
 from app.routes.customer.backtest import (
-    _IST,
-    _check_indicators,
-    _check_pattern,
-    _required_warmup,
-    _simulate,
-    _simulate_options,
+    _BUFFER_DAYS,
+    _MAX_FETCH_DAYS,
+    _simulate_swing_breakout,
+    _simulate_swing_breakout_options,
+    fetch_candles_for_swing_config,
 )
 from app.services.encryption import decrypt
 
 logger = logging.getLogger(__name__)
 
 admin_backtest_bp = Blueprint('admin_backtest', __name__)
-
-
-def _last_thursday(date):
-    """Return the last Thursday on or before the given date."""
-    while date.weekday() != 3:  # 3 = Thursday
-        date -= timedelta(days=1)
-    return date
-
-
-def _option_expirations_last_3m():
-    """Generate all weekly option expiry dates from the last 3 months."""
-    now = datetime.now(_IST).date()
-    three_months_ago = now - timedelta(days=90)
-    expirations = []
-
-    # Get all Thursdays in the last 3 months (weekly expirations)
-    current = _last_thursday(now)
-    while current >= three_months_ago:
-        expirations.append(current)
-        current -= timedelta(days=7)
-
-    return sorted(expirations, reverse=True)  # Most recent first
-
-
-def _generate_option_symbols(underlying: str, expirations: list, strikes_range: int = 5) -> list[str]:
-    """Generate option symbols for an underlying across expirations.
-
-    Args:
-        underlying: Underlying symbol (e.g., 'APOLLOHOSP', 'NIFTY')
-        expirations: List of (date, atm_price) tuples for option expirations
-        strikes_range: Number of strikes above/below ATM to include
-
-    Returns:
-        List of option symbols like 'APOLLOHOSP25JUL7600CE'
-    """
-    symbols = []
-
-    for expiry_date, atm_price in expirations:
-        exp_str = expiry_date.strftime('%d%b').upper()
-
-        # Generate strikes around ATM (assuming 100-point intervals for stocks)
-        base_strike = int((atm_price // 100) * 100)
-        strike_interval = 50 if underlying in ['NIFTY', 'BANKNIFTY'] else 100
-
-        for strike_offset in range(-strikes_range, strikes_range + 1):
-            strike = base_strike + (strike_offset * strike_interval)
-            if strike > 0:
-                for option_type in ['CE', 'PE']:
-                    symbol = f"{underlying}{expiry_date.strftime('%d%b').upper()}{strike}{option_type}"
-                    symbols.append(symbol)
-
-    return symbols
 
 
 @admin_backtest_bp.post('/api/admin/backtest')
@@ -100,6 +47,11 @@ def run_admin_backtest():
     if not strategy:
         return jsonify({'error': 'Strategy not found'}), 404
 
+    if not strategy.swing_zone_config_id:
+        return jsonify({'error': 'Strategy has no Swing Zone Config — edit the strategy first'}), 400
+
+    swing_config = strategy.swing_zone_config
+
     # Prefer admin's own Kite config; fall back to any connected config
     config = KiteConfig.query.filter_by(user_id=user_id).first()
     if not (config and config.is_connected and config.access_token_encrypted):
@@ -109,7 +61,6 @@ def run_admin_backtest():
 
     try:
         from kiteconnect import KiteConnect
-        from app.routes.customer.market import _resolve_token
         from app.services.option_resolver import meta_for as _option_meta_for
 
         kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
@@ -128,43 +79,41 @@ def run_admin_backtest():
             candle_symbol   = strategy.instrument
             candle_exchange = strategy.exchange.value if hasattr(strategy.exchange, 'value') else str(strategy.exchange)
 
-        token = _resolve_token(candle_symbol, candle_exchange, kite)
-        if not token:
-            return jsonify({'error': f'{candle_exchange}:{candle_symbol} not found — refresh instruments'}), 404
+        candle_size = swing_config.candle_size
+        max_extra = _MAX_FETCH_DAYS.get(candle_size, 400) - _BUFFER_DAYS.get(candle_size, 40) - swing_config.period_days
+        days = min(days, max(max_extra, 1))
 
-        now_ist   = datetime.now(_IST)
-        to_date   = now_ist.date()
-        from_date = to_date - timedelta(days=days + 120)
-
-        raw = kite.historical_data(
-            token,
-            from_date.strftime('%Y-%m-%d'),
-            to_date.strftime('%Y-%m-%d'),
-            'day',
+        all_candles = fetch_candles_for_swing_config(
+            kite, swing_config.to_dict(), candle_symbol, candle_exchange, extra_days=days,
         )
-        all_candles = [{
-            'date':   c['date'].strftime('%Y-%m-%d'),
-            'open':   c['open'], 'high': c['high'],
-            'low':    c['low'],  'close': c['close'],
-            'volume': c['volume'],
-        } for c in raw]
 
-        if len(all_candles) < 5:
+        if len(all_candles) < swing_config.pivot_bars * 2 + 1:
             return jsonify({'error': 'Not enough historical data for this instrument'}), 400
 
+        swing_config_dict = swing_config.to_dict()
         strategy_dict = strategy.to_dict()
-        pattern       = strategy_dict.get('candle_pattern') or {}
-        warmup        = _required_warmup(
-            pattern.get('indicator_settings'),
-            pattern.get('trade_filters'),
-        )
-        sim_candles = all_candles[-(days + warmup):]
 
         if options_mode:
-            detections, trades, skipped_dates = _simulate_options(strategy_dict, sim_candles, kite, option_config)
+            detections, trades, skipped_dates = _simulate_swing_breakout_options(
+                strategy_dict, swing_config_dict, all_candles, kite, option_config,
+            )
         else:
-            detections, trades = _simulate(strategy_dict, sim_candles)
+            detections, trades = _simulate_swing_breakout(strategy_dict, swing_config_dict, all_candles)
             skipped_dates = []
+
+        # Restrict the report window to the requested `days` ending at the last candle
+        last_dt = datetime.strptime(all_candles[-1]['date'], '%Y-%m-%d %H:%M:%S')
+        cutoff_dt = last_dt - timedelta(days=days)
+        report_candles = [
+            c for c in all_candles
+            if datetime.strptime(c['date'], '%Y-%m-%d %H:%M:%S') >= cutoff_dt
+        ]
+        if not report_candles:
+            report_candles = all_candles
+
+        cutoff_str = report_candles[0]['date']
+        detections = [d for d in detections if d['date'] >= cutoff_str]
+        trades     = [t for t in trades if t['entry_date'] >= cutoff_str]
 
         winning  = [t for t in trades if t['pnl_pct'] > 0]
         losing   = [t for t in trades if t['pnl_pct'] <= 0]
@@ -178,9 +127,8 @@ def run_admin_backtest():
         accuracy    = round(len(winning) / len(trades) * 100, 1) if trades else 0
         avg_pnl_pct = round(sum(t['pnl_pct'] for t in trades) / len(trades), 2) if trades else 0
 
-        report_candles = sim_candles[warmup:]
-        period_from = report_candles[0]['date']  if report_candles else from_date.strftime('%Y-%m-%d')
-        period_to   = report_candles[-1]['date'] if report_candles else to_date.strftime('%Y-%m-%d')
+        period_from = report_candles[0]['date']
+        period_to   = report_candles[-1]['date']
 
         return jsonify({
             'strategy':           strategy_dict,

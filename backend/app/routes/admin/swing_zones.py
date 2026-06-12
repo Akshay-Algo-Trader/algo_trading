@@ -5,7 +5,12 @@ from flask_jwt_extended import get_jwt_identity
 from app.extensions import db
 from app.models import SwingZoneConfig, SwingZoneScanResult, KiteConfig
 from app.routes.decorators import admin_required
-from app.services.swing_zone_detector import detect_sr_levels
+from app.services.swing_zone_detector import (
+    detect_sr_levels,
+    _KITE_INTERVAL,
+    _BUFFER_DAYS,
+    _MAX_FETCH_DAYS,
+)
 from app.services.fvg_zone_detector import _aggregate_to_4h
 from app.services.encryption import decrypt
 
@@ -14,37 +19,9 @@ admin_swing_zones_bp = Blueprint('admin_swing_zones', __name__)
 
 _IST = timezone(timedelta(hours=5, minutes=30))
 
-_KITE_INTERVAL = {
-    '1min': 'minute',
-    '5min': '5minute',
-    '15min': '15minute',
-    '30min': '30minute',
-    '1hour': '60minute',
-    '4hour': '60minute',
-}
-
 _VALID_SIZES = ('1min', '5min', '15min', '30min', '1hour', '4hour')
 _VALID_PERIODS = (1, 7, 10, 30, 60, 90)
-
-# Buffer days fetched before start_date to give pivot detection lookback context
-_BUFFER_DAYS = {
-    '1min': 3,
-    '5min': 5,
-    '15min': 7,
-    '30min': 10,
-    '1hour': 15,
-    '4hour': 40,
-}
-
-# Kite historical data API max range (days) per interval
-_MAX_FETCH_DAYS = {
-    '1min': 60,
-    '5min': 100,
-    '15min': 200,
-    '30min': 200,
-    '1hour': 400,
-    '4hour': 400,
-}
+_VALID_STRONG_PCTS = (0.1, 0.5, 1.0, 1.5, 2.0)
 
 
 @admin_swing_zones_bp.get('/api/admin/swing-zones')
@@ -64,12 +41,17 @@ def create_swing_zone():
     if SwingZoneConfig.query.filter_by(name=data['name']).first():
         return jsonify({'error': 'A config with this name already exists'}), 409
 
+    strong_level_pct = float(data.get('strong_level_pct', 0.5))
+    if strong_level_pct not in _VALID_STRONG_PCTS:
+        return jsonify({'error': f'strong_level_pct must be one of {_VALID_STRONG_PCTS}'}), 400
+
     config = SwingZoneConfig(
         name=data['name'],
         description=data.get('description'),
         candle_size=data.get('candle_size', '4hour'),
         period_days=int(data.get('period_days', 30)),
         pivot_bars=int(data.get('pivot_bars', 5)),
+        strong_level_pct=strong_level_pct,
         created_by=int(get_jwt_identity()),
     )
     db.session.add(config)
@@ -97,6 +79,12 @@ def update_swing_zone(config_id):
     for int_field in ['period_days', 'pivot_bars']:
         if int_field in data:
             setattr(config, int_field, int(data[int_field]))
+
+    if 'strong_level_pct' in data:
+        strong_level_pct = float(data['strong_level_pct'])
+        if strong_level_pct not in _VALID_STRONG_PCTS:
+            return jsonify({'error': f'strong_level_pct must be one of {_VALID_STRONG_PCTS}'}), 400
+        config.strong_level_pct = strong_level_pct
 
     db.session.commit()
     return jsonify({'swing_zone': config.to_dict()}), 200
@@ -269,11 +257,158 @@ def get_swing_scan_history(config_id):
 @admin_swing_zones_bp.get('/api/admin/swing-zones/<int:config_id>/scan/<int:result_id>')
 @admin_required
 def get_swing_scan_result(config_id, result_id):
-    SwingZoneConfig.query.get_or_404(config_id)
+    config = SwingZoneConfig.query.get_or_404(config_id)
     result = SwingZoneScanResult.query.get_or_404(result_id)
     if result.swing_config_id != config_id:
         return jsonify({'error': 'Scan result not found'}), 404
-    return jsonify(result.to_dict()), 200
+    data = result.to_dict()
+    data['strong_level_pct'] = config.strong_level_pct
+    return jsonify(data), 200
+
+
+# ── Bulk swing-level scanner ──────────────────────────────────────────────────
+
+_SCANNER_EXCHANGES = ('NSE', 'BSE', 'NFO', 'NSE_INDICES', 'MCX')
+
+
+def _build_scan_universe(kite, exchange):
+    """All scannable instruments for an exchange as [{'symbol', 'token'}].
+
+    NSE/BSE -> equities (main-board symbols only), NSE_INDICES -> indices,
+    NFO/MCX -> nearest-expiry futures, one per underlying.
+    """
+    from datetime import date as _date
+    from app.models.instrument import Instrument
+
+    if exchange in ('NFO', 'MCX'):
+        today = _date.today()
+        best = {}
+        for r in kite.instruments(exchange):
+            if r.get('instrument_type') != 'FUT':
+                continue
+            expiry = r.get('expiry')
+            if expiry and expiry < today:
+                continue
+            name = r.get('name') or r['tradingsymbol']
+            prev = best.get(name)
+            if prev is None or (expiry and prev.get('expiry') and expiry < prev['expiry']):
+                best[name] = r
+        rows = [{'symbol': r['tradingsymbol'], 'token': r['instrument_token']}
+                for r in best.values()]
+        return sorted(rows, key=lambda x: x['symbol'])
+
+    if exchange == 'NSE_INDICES':
+        insts = Instrument.query.filter_by(exchange='NSE_INDICES').all()
+        if insts:
+            rows = [{'symbol': i.tradingsymbol, 'token': i.instrument_token} for i in insts]
+        else:
+            rows = [{'symbol': r['tradingsymbol'], 'token': r['instrument_token']}
+                    for r in kite.instruments('NSE') if r.get('segment') == 'INDICES']
+        return sorted(rows, key=lambda x: x['symbol'])
+
+    # NSE / BSE equities; skip series-suffixed symbols (e.g. -BE, -SM)
+    insts = Instrument.query.filter_by(exchange=exchange, instrument_type='EQ').all()
+    if insts:
+        rows = [{'symbol': i.tradingsymbol, 'token': i.instrument_token}
+                for i in insts if '-' not in i.tradingsymbol]
+    else:
+        rows = [{'symbol': r['tradingsymbol'], 'token': r['instrument_token']}
+                for r in kite.instruments(exchange)
+                if r.get('instrument_type') == 'EQ' and '-' not in r['tradingsymbol']]
+    return sorted(rows, key=lambda x: x['symbol'])
+
+
+@admin_swing_zones_bp.post('/api/admin/swing-scanner/run')
+@admin_required
+def run_swing_level_scan():
+    from app.services import swing_level_scanner as scanner
+
+    user_id = int(get_jwt_identity())
+    data = request.get_json() or {}
+
+    config_id = data.get('swing_config_id')
+    if not config_id:
+        return jsonify({'error': 'swing_config_id required'}), 400
+    swing_config = SwingZoneConfig.query.get_or_404(int(config_id))
+
+    exchange = (data.get('exchange') or 'NSE').upper()
+    if exchange not in _SCANNER_EXCHANGES:
+        return jsonify({'error': f'exchange must be one of {_SCANNER_EXCHANGES}'}), 400
+
+    candle_size = swing_config.candle_size
+    start_date_str = (data.get('start_date') or '').strip()
+    end_date_str = (data.get('end_date') or '').strip()
+    if start_date_str and end_date_str:
+        try:
+            start_date = datetime.strptime(start_date_str, '%Y-%m-%d').date()
+            end_date = datetime.strptime(end_date_str, '%Y-%m-%d').date()
+        except ValueError:
+            return jsonify({'error': 'Invalid date format, expected YYYY-MM-DD'}), 400
+        if start_date >= end_date:
+            return jsonify({'error': 'start_date must be before end_date'}), 400
+        max_days = _MAX_FETCH_DAYS.get(candle_size, 400) - _BUFFER_DAYS.get(candle_size, 40)
+        if (end_date - start_date).days > max_days:
+            return jsonify({'error': f'Date range too large for {candle_size} candles (max {max_days} days)'}), 400
+    else:
+        end_date = datetime.now(_IST).date()
+        start_date = end_date - timedelta(days=swing_config.period_days)
+
+    if scanner.has_running_scan():
+        return jsonify({'error': 'A scan is already running — wait for it to finish or cancel it'}), 409
+
+    kite_cfg = KiteConfig.query.filter_by(user_id=user_id).first()
+    if not (kite_cfg and kite_cfg.is_connected and kite_cfg.access_token_encrypted):
+        kite_cfg = KiteConfig.query.filter_by(is_connected=True).first()
+    if not (kite_cfg and kite_cfg.access_token_encrypted):
+        return jsonify({'error': 'No connected Kite account available'}), 400
+
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=decrypt(kite_cfg.api_key_encrypted))
+        kite.set_access_token(decrypt(kite_cfg.access_token_encrypted))
+
+        universe = _build_scan_universe(kite, exchange)
+        if not universe:
+            return jsonify({'error': f'No instruments found for {exchange} — sync instruments first'}), 400
+
+        run = scanner.start_scan(
+            kite, universe, swing_config.to_dict(), exchange,
+            start_date, end_date,
+            _KITE_INTERVAL.get(candle_size, '60minute'),
+            _BUFFER_DAYS.get(candle_size, 40),
+            strict=bool(data.get('strict')),
+        )
+        return jsonify({'run': run}), 202
+
+    except Exception as exc:
+        logger.exception("Swing level scan start failed config=%s user=%s: %s", config_id, user_id, exc)
+        return jsonify({'error': str(exc)}), 500
+
+
+@admin_swing_zones_bp.get('/api/admin/swing-scanner/latest')
+@admin_required
+def get_latest_swing_level_scan():
+    from app.services import swing_level_scanner as scanner
+    return jsonify({'run': scanner.get_latest_run()}), 200
+
+
+@admin_swing_zones_bp.get('/api/admin/swing-scanner/<int:run_id>')
+@admin_required
+def get_swing_level_scan(run_id):
+    from app.services import swing_level_scanner as scanner
+    run = scanner.get_run(run_id)
+    if not run:
+        return jsonify({'error': 'Scan run not found'}), 404
+    return jsonify({'run': run}), 200
+
+
+@admin_swing_zones_bp.post('/api/admin/swing-scanner/<int:run_id>/cancel')
+@admin_required
+def cancel_swing_level_scan(run_id):
+    from app.services import swing_level_scanner as scanner
+    if not scanner.cancel_run(run_id):
+        return jsonify({'error': 'Scan run not found'}), 404
+    return jsonify({'message': 'Cancellation requested'}), 200
 
 
 @admin_swing_zones_bp.get('/api/admin/swing-zones/chart-candles')

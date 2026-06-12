@@ -5,7 +5,7 @@ import {
   Card, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
 import InstrumentSearch from '../../components/admin/InstrumentSearch'
-import SRChart from '../../components/admin/SwingZoneChart'
+import SRChart, { StrongLevels, findStrongLevels, strongClusterOthers, classifyByLtp, STRONG_LEVEL_PCT_OPTIONS } from '../../components/admin/SwingZoneChart'
 
 const PERIOD_OPTIONS = [1, 7, 10, 30, 60, 90]
 const SIZE_LABELS = { '1min': '1 Min', '5min': '5 Min', '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
@@ -16,6 +16,7 @@ const EMPTY_FORM = {
   candle_size: '4hour',
   period_days: 30,
   pivot_bars: 5,
+  strong_level_pct: 0.5,
 }
 
 export default function SwingZoneNew() {
@@ -41,6 +42,16 @@ export default function SwingZoneNew() {
   const [scanError, setScanError] = useState('')
   const [scanResult, setScanResult] = useState(null)
   const [summary, setSummary] = useState(null)
+  const [currentPrice, setCurrentPrice] = useState(null)
+
+  useEffect(() => {
+    if (!scanResult?.instrument) return
+    axiosInstance.get('/api/admin/instruments/price', {
+      params: { symbol: scanResult.instrument, exchange: scanResult.exchange },
+    })
+      .then(r => setCurrentPrice(r.data?.ltp ?? null))
+      .catch(() => setCurrentPrice(null))
+  }, [scanResult?.instrument, scanResult?.exchange])
 
   function set(k) { return e => setForm(f => ({ ...f, [k]: e.target.value })) }
 
@@ -57,6 +68,7 @@ export default function SwingZoneNew() {
         candle_size: form.candle_size,
         period_days: parseInt(form.period_days),
         pivot_bars: parseInt(form.pivot_bars),
+        strong_level_pct: parseFloat(form.strong_level_pct),
       }
       if (!id) {
         const r = await axiosInstance.post('/api/admin/swing-zones', payload)
@@ -91,6 +103,7 @@ export default function SwingZoneNew() {
           candle_size: form.candle_size,
           period_days: parseInt(form.period_days),
           pivot_bars: parseInt(form.pivot_bars),
+          strong_level_pct: parseFloat(form.strong_level_pct),
         })
       }
       navigate('/admin/swing-zones')
@@ -101,9 +114,10 @@ export default function SwingZoneNew() {
     }
   }
 
-  const levels = scanResult?.levels_detected ?? []
+  const levels = classifyByLtp(scanResult?.levels_detected ?? [], currentPrice)
   const resistance = levels.filter(l => l.type === 'RESISTANCE').sort((a, b) => String(a.date).localeCompare(String(b.date)))
   const support = levels.filter(l => l.type === 'SUPPORT').sort((a, b) => String(a.date).localeCompare(String(b.date)))
+  const { strongResistance, strongSupport } = findStrongLevels(levels, form.strong_level_pct)
 
   return (
     <div className="space-y-6">
@@ -123,7 +137,7 @@ export default function SwingZoneNew() {
             <Input value={form.description} onChange={set('description')} placeholder="Optional" />
           </FormField>
         </div>
-        <div className="grid grid-cols-3 gap-x-6 gap-y-1">
+        <div className="grid grid-cols-4 gap-x-6 gap-y-1">
           <FormField label="Candle Size">
             <Select value={form.candle_size} onChange={set('candle_size')}>
               {Object.entries(SIZE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -140,6 +154,11 @@ export default function SwingZoneNew() {
               value={form.pivot_bars}
               onChange={e => setForm(f => ({ ...f, pivot_bars: parseInt(e.target.value) || 5 }))}
             />
+          </FormField>
+          <FormField label="Strong Level %" hint="Levels within this % of each other form a strong cluster">
+            <Select value={form.strong_level_pct} onChange={e => setForm(f => ({ ...f, strong_level_pct: parseFloat(e.target.value) }))}>
+              {STRONG_LEVEL_PCT_OPTIONS.map(p => <option key={p} value={p}>{p}%</option>)}
+            </Select>
           </FormField>
         </div>
       </Card>
@@ -163,6 +182,7 @@ export default function SwingZoneNew() {
                 <option value="BSE">BSE</option>
                 <option value="NFO">NFO</option>
                 <option value="NSE_INDICES">NSE Indices</option>
+                <option value="MCX">MCX</option>
               </Select>
             </FormField>
           </div>
@@ -227,24 +247,37 @@ export default function SwingZoneNew() {
             candleSize={scanResult.candle_size}
             periodFrom={scanResult.period.from}
             periodTo={scanResult.period.to}
+            strongPct={parseFloat(form.strong_level_pct)}
+            currentPrice={currentPrice}
           />
         </Card>
       )}
 
       {levels.length > 0 && (
         <Card className="p-6">
+          <StrongLevels levels={levels} pct={form.strong_level_pct} />
           <div className="grid grid-cols-2 gap-6">
             <div>
               <p className="text-xs font-semibold text-red-600 uppercase tracking-wide mb-2">
                 Resistance — {resistance.length}
               </p>
               <div className="space-y-1">
-                {resistance.map((l, i) => (
-                  <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded bg-red-50 border border-red-100">
-                    <span className="text-sm font-semibold text-red-700">{l.price}</span>
-                    <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
-                  </div>
-                ))}
+                {resistance.map((l, i) => {
+                  const strongOthers = strongClusterOthers(strongResistance, l.price)
+                  return (
+                    <div key={i} className={`flex items-center justify-between py-1.5 px-3 rounded border ${strongOthers ? 'bg-red-100 border-red-300 ring-1 ring-red-300' : 'bg-red-50 border-red-100'}`}>
+                      <span className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-red-700">{l.price}</span>
+                        {strongOthers && (
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-red-600 bg-white px-1.5 py-0.5 rounded">
+                            Strong{strongOthers.length > 0 && ` (${strongOthers.join(', ')})`}
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
+                    </div>
+                  )
+                })}
               </div>
             </div>
             <div>
@@ -252,12 +285,22 @@ export default function SwingZoneNew() {
                 Support — {support.length}
               </p>
               <div className="space-y-1">
-                {support.map((l, i) => (
-                  <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded bg-green-50 border border-green-100">
-                    <span className="text-sm font-semibold text-green-700">{l.price}</span>
-                    <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
-                  </div>
-                ))}
+                {support.map((l, i) => {
+                  const strongOthers = strongClusterOthers(strongSupport, l.price)
+                  return (
+                    <div key={i} className={`flex items-center justify-between py-1.5 px-3 rounded border ${strongOthers ? 'bg-green-100 border-green-300 ring-1 ring-green-300' : 'bg-green-50 border-green-100'}`}>
+                      <span className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-green-700">{l.price}</span>
+                        {strongOthers && (
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-green-600 bg-white px-1.5 py-0.5 rounded">
+                            Strong{strongOthers.length > 0 && ` (${strongOthers.join(', ')})`}
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </div>

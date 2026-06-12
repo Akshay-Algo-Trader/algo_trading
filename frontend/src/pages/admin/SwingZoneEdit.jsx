@@ -1,11 +1,11 @@
 import { useEffect, useState, useCallback } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import axiosInstance from '../../api/axiosInstance'
 import {
   Card, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
 import InstrumentSearch from '../../components/admin/InstrumentSearch'
-import SRChart from '../../components/admin/SwingZoneChart'
+import SRChart, { NearbyLevels, StrongLevels, findNearestLevels, findStrongLevels, strongClusterOthers, classifyByLtp, STRONG_LEVEL_PCT_OPTIONS } from '../../components/admin/SwingZoneChart'
 
 const PERIOD_OPTIONS = [1, 7, 10, 30, 60, 90]
 const SIZE_LABELS = { '1min': '1 Min', '5min': '5 Min', '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
@@ -18,6 +18,7 @@ function fmt(dt) {
 export default function SwingZoneEdit() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   const [form, setForm] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -28,23 +29,37 @@ export default function SwingZoneEdit() {
 
   const today = new Date().toISOString().slice(0, 10)
 
-  // Scan state
-  const [instrument, setInstrument] = useState('')
-  const [exchange, setExchange] = useState('NSE')
+  // Scan state — prefillable via ?instrument=&exchange=&start_date=&end_date=
+  // (swing level scanner click-through passes its run's exact window so the
+  // chart reproduces the data the scanner matched on)
+  const [instrument, setInstrument] = useState(() => (searchParams.get('instrument') ?? '').toUpperCase())
+  const [exchange, setExchange] = useState(() => searchParams.get('exchange') ?? 'NSE')
+  const [autoScanned, setAutoScanned] = useState(false)
   const [startDate, setStartDate] = useState(() =>
-    new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
+    searchParams.get('start_date') || new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
   )
-  const [endDate, setEndDate] = useState(today)
+  const [endDate, setEndDate] = useState(() => searchParams.get('end_date') || today)
 
   useEffect(() => {
+    if (searchParams.get('start_date')) return
     if (form?.period_days) {
       setStartDate(new Date(Date.now() - form.period_days * 86400000).toISOString().slice(0, 10))
     }
-  }, [form?.period_days])
+  }, [form?.period_days]) // eslint-disable-line react-hooks/exhaustive-deps
   const [scanning, setScanning] = useState(false)
   const [scanError, setScanError] = useState('')
   const [scanResult, setScanResult] = useState(null)
   const [summary, setSummary] = useState(null)
+  const [currentPrice, setCurrentPrice] = useState(null)
+
+  useEffect(() => {
+    if (!scanResult?.instrument) return
+    axiosInstance.get('/api/admin/instruments/price', {
+      params: { symbol: scanResult.instrument, exchange: scanResult.exchange },
+    })
+      .then(r => setCurrentPrice(r.data?.ltp ?? null))
+      .catch(() => setCurrentPrice(null))
+  }, [scanResult?.instrument, scanResult?.exchange])
 
   // History state
   const [history, setHistory] = useState([])
@@ -77,6 +92,7 @@ export default function SwingZoneEdit() {
         candle_size: form.candle_size,
         period_days: parseInt(form.period_days),
         pivot_bars: parseInt(form.pivot_bars),
+        strong_level_pct: parseFloat(form.strong_level_pct),
         is_active: form.is_active,
       })
       setSaved(true)
@@ -88,8 +104,20 @@ export default function SwingZoneEdit() {
     }
   }
 
+  // Auto-run the scan when arriving from the swing level scanner results
+  useEffect(() => {
+    if (form && !autoScanned && searchParams.get('instrument')) {
+      setAutoScanned(true)
+      runScan()
+    }
+  }, [form]) // eslint-disable-line react-hooks/exhaustive-deps
+
   async function handleScan(e) {
     e.preventDefault()
+    runScan()
+  }
+
+  async function runScan() {
     if (!instrument.trim()) { setScanError('Instrument is required'); return }
     setScanning(true); setScanError(''); setScanResult(null); setSummary(null)
     try {
@@ -126,9 +154,11 @@ export default function SwingZoneEdit() {
     )
   }
 
-  const levels = scanResult?.levels_detected ?? []
+  const levels = classifyByLtp(scanResult?.levels_detected ?? [], currentPrice)
   const resistance = levels.filter(l => l.type === 'RESISTANCE').sort((a, b) => String(a.date).localeCompare(String(b.date)))
   const support = levels.filter(l => l.type === 'SUPPORT').sort((a, b) => String(a.date).localeCompare(String(b.date)))
+  const { nearestResistance, nearestSupport } = findNearestLevels(levels, currentPrice)
+  const { strongResistance, strongSupport } = findStrongLevels(levels, form.strong_level_pct)
 
   return (
     <div className="space-y-6">
@@ -169,7 +199,7 @@ export default function SwingZoneEdit() {
 
         <Card className="p-6">
           <h2 className="text-sm font-semibold text-gray-900 mb-4 uppercase tracking-wide">Detection Settings</h2>
-          <div className="grid grid-cols-3 gap-x-6 gap-y-1">
+          <div className="grid grid-cols-4 gap-x-6 gap-y-1">
             <FormField label="Candle Size">
               <Select value={form.candle_size} onChange={set('candle_size')}>
                 {Object.entries(SIZE_LABELS).map(([v, l]) => (
@@ -190,6 +220,11 @@ export default function SwingZoneEdit() {
                 value={form.pivot_bars}
                 onChange={e => setForm(f => ({ ...f, pivot_bars: parseInt(e.target.value) || 5 }))}
               />
+            </FormField>
+            <FormField label="Strong Level %" hint="Levels within this % of each other form a strong cluster">
+              <Select value={form.strong_level_pct} onChange={e => setForm(f => ({ ...f, strong_level_pct: parseFloat(e.target.value) }))}>
+                {STRONG_LEVEL_PCT_OPTIONS.map(p => <option key={p} value={p}>{p}%</option>)}
+              </Select>
             </FormField>
           </div>
         </Card>
@@ -224,6 +259,7 @@ export default function SwingZoneEdit() {
                 <option value="BSE">BSE</option>
                 <option value="NFO">NFO</option>
                 <option value="NSE_INDICES">NSE Indices</option>
+                <option value="MCX">MCX</option>
               </Select>
             </FormField>
           </div>
@@ -281,18 +317,32 @@ export default function SwingZoneEdit() {
 
       {levels.length > 0 && (
         <Card className="p-6">
+          <NearbyLevels levels={levels} currentPrice={currentPrice} />
+          <StrongLevels levels={levels} pct={form.strong_level_pct} />
           <div className="grid grid-cols-2 gap-6">
             <div>
               <p className="text-xs font-semibold text-red-600 uppercase tracking-wide mb-2">
                 Resistance — {resistance.length}
               </p>
               <div className="space-y-1">
-                {resistance.map((l, i) => (
-                  <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded bg-red-50 border border-red-100">
-                    <span className="text-sm font-semibold text-red-700">{l.price}</span>
-                    <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
-                  </div>
-                ))}
+                {resistance.map((l, i) => {
+                  const isNearest = l === nearestResistance
+                  const strongOthers = strongClusterOthers(strongResistance, l.price)
+                  return (
+                    <div key={i} className={`flex items-center justify-between py-1.5 px-3 rounded border ${isNearest ? 'bg-red-100 border-red-300 ring-1 ring-red-300' : 'bg-red-50 border-red-100'}`}>
+                      <span className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-red-700">{l.price}</span>
+                        {isNearest && <span className="text-[10px] font-bold uppercase tracking-wide text-red-600 bg-white px-1.5 py-0.5 rounded">Nearest</span>}
+                        {strongOthers && (
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-red-600 bg-white px-1.5 py-0.5 rounded">
+                            Strong{strongOthers.length > 0 && ` (${strongOthers.join(', ')})`}
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
+                    </div>
+                  )
+                })}
               </div>
             </div>
             <div>
@@ -300,12 +350,24 @@ export default function SwingZoneEdit() {
                 Support — {support.length}
               </p>
               <div className="space-y-1">
-                {support.map((l, i) => (
-                  <div key={i} className="flex items-center justify-between py-1.5 px-3 rounded bg-green-50 border border-green-100">
-                    <span className="text-sm font-semibold text-green-700">{l.price}</span>
-                    <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
-                  </div>
-                ))}
+                {support.map((l, i) => {
+                  const isNearest = l === nearestSupport
+                  const strongOthers = strongClusterOthers(strongSupport, l.price)
+                  return (
+                    <div key={i} className={`flex items-center justify-between py-1.5 px-3 rounded border ${isNearest ? 'bg-green-100 border-green-300 ring-1 ring-green-300' : 'bg-green-50 border-green-100'}`}>
+                      <span className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-green-700">{l.price}</span>
+                        {isNearest && <span className="text-[10px] font-bold uppercase tracking-wide text-green-600 bg-white px-1.5 py-0.5 rounded">Nearest</span>}
+                        {strongOthers && (
+                          <span className="text-[10px] font-bold uppercase tracking-wide text-green-600 bg-white px-1.5 py-0.5 rounded">
+                            Strong{strongOthers.length > 0 && ` (${strongOthers.join(', ')})`}
+                          </span>
+                        )}
+                      </span>
+                      <span className="text-xs text-gray-500">{String(l.date).slice(0, 16)}</span>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           </div>
@@ -321,6 +383,8 @@ export default function SwingZoneEdit() {
             candleSize={scanResult.candle_size}
             periodFrom={scanResult.period.from}
             periodTo={scanResult.period.to}
+            strongPct={parseFloat(form.strong_level_pct)}
+            currentPrice={currentPrice}
           />
         </Card>
       )}

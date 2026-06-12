@@ -144,7 +144,7 @@ function CustomerStrategiesModal({ user, isOpen, onClose }) {
           <table className="w-full text-xs">
             <thead className="sticky top-0 bg-gray-50">
               <tr>
-                {['Name', 'Instrument', 'Order Type', 'Entry Condition', 'SL%', 'TP%', 'Status'].map(h => (
+                {['Name', 'Instrument', 'Order Type', 'Swing Level', 'SL%', 'TP%', 'Status'].map(h => (
                   <th key={h} className="px-3 py-2 text-left font-semibold text-gray-500 uppercase tracking-wide whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -159,7 +159,7 @@ function CustomerStrategiesModal({ user, isOpen, onClose }) {
                   <td className="px-3 py-2 font-medium">{s.instrument} <span className="text-gray-400">({s.exchange})</span></td>
                   <td className="px-3 py-2"><Badge variant="gray">{s.order_type}</Badge></td>
                   <td className="px-3 py-2 text-gray-600">
-                    {s.entry_condition?.type?.replace(/_/g, ' ')} @ {s.entry_condition?.value}
+                    {s.swing_zone_config?.name ?? <span className="text-gray-400">—</span>}
                   </td>
                   <td className="px-3 py-2 text-red-600 font-medium">{s.stop_loss_pct}%</td>
                   <td className="px-3 py-2 text-green-600 font-medium">{s.take_profit_pct}%</td>

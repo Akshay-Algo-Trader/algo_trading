@@ -20,8 +20,6 @@ class CandlePattern(db.Model):
     created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
-    strategies = db.relationship('Strategy', backref='candle_pattern', lazy='dynamic')
-
     def to_dict(self):
         return {
             'id': self.id,

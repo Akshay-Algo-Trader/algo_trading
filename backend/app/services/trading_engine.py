@@ -2,7 +2,7 @@
 TradingEngine — server-side strategy execution.
 
 Replaces the browser-based useStrategyExecutor with a backend thread that
-owns the full pattern detection → entry → multi-target exit lifecycle for
+owns the full swing-level breakout → entry → multi-target exit lifecycle for
 both paper and live modes.
 
 State is persisted to the database on every meaningful change so that:
@@ -27,13 +27,12 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 from typing import Optional
 
 from app.extensions import db
 from app.models import (
     AuditLog,
-    CandlePattern,
     ExecutionLog,
     Instrument,
     KiteConfig,
@@ -55,62 +54,27 @@ from app.models.paper_order import (
 from app.models.trading_session import SessionMode, SessionStatus
 from app.routes.customer.backtest import (
     _build_trade_plan,
-    _calc_atr,
     _check_candle_size,
-    _check_day_filter,
-    _check_indicators,
-    _check_loss_limit,
-    _check_pattern,
-    _check_trend_filter,
     _j,
-    _required_warmup,
 )
 from app.services.encryption import decrypt
 from app.services.option_resolver import meta_for as _option_meta_for, resolve_option_contract
+from app.services.swing_breakout import (
+    classify_by_ltp,
+    evaluate_breakout,
+    find_last_level,
+    find_nearest_levels,
+    find_strong_levels,
+)
+from app.services.swing_zone_detector import detect_sr_levels, fetch_candles_for_swing_config
 from app.services.ticker_service import ticker_service
 
 logger = logging.getLogger(__name__)
 
-_IST = timezone(timedelta(hours=5, minutes=30))
 _POLL_SECONDS = 3            # how often the engine checks LTP / runs eval
-_CANDLE_CACHE_TTL_SEC = 300  # 5 min — daily candles refresh
+_CANDLE_CACHE_TTL_SEC = 300  # 5 min — swing candles refresh
 _BROKERAGE_FLAT = 20.0
-_LOG_RING_PER_SESSION = 100  # cap on persisted log lines per session
-_DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-
-
-def _check_time_window(filters, now=None):
-    f = _j(filters, {})
-    tw = (f if isinstance(f, dict) else {}).get('time_window') or {}
-    if not tw.get('enabled'):
-        return True
-    try:
-        fH, fM = [int(x) for x in (tw.get('from') or '09:15').split(':')]
-        tH, tM = [int(x) for x in (tw.get('to')   or '14:00').split(':')]
-    except Exception:
-        return True
-    now = now or datetime.now(_IST)
-    nm = now.hour * 60 + now.minute
-    return (fH * 60 + fM) <= nm <= (tH * 60 + tM)
-
-
-def _check_live_day_filter(filters, now=None):
-    f = _j(filters, {})
-    df = (f if isinstance(f, dict) else {}).get('day_filter') or {}
-    if not df.get('enabled'):
-        return True
-    now = now or datetime.now(_IST)
-    # Python Mon=0..Sun=6; convert to JS Sun=0..Sat=6
-    js_wd = (now.weekday() + 1) % 7
-    return js_wd in (df.get('days') or [1, 2, 3, 4, 5])
-
-
-def _check_daily_trade_limit(filters, completed_trades_today):
-    f = _j(filters, {})
-    dl = (f if isinstance(f, dict) else {}).get('daily_trade_limit') or {}
-    if not dl.get('enabled'):
-        return True
-    return completed_trades_today < int(dl.get('max_trades') or 5)
+_LOG_RING_PER_SESSION = 300  # cap on persisted log lines per session (per-tick monitoring snapshots)
 
 
 def _split_qty(remaining, targets_left):
@@ -144,11 +108,9 @@ class TradingEngine:
         self._stop_loss_rules: dict = {}
         self._target_rules: dict = {}
         self._strategy_dict: dict = {}
-        self._pattern: dict = {}
+        self._swing_config: dict = {}
         self._direction: str = 'bullish'
         self._instrument_token: Optional[int] = None
-        self._needs_candles: bool = False
-        self._candle_days_needed: int = 60
 
         # Options mode (resolved at entry when strategy.option_config.enabled)
         self._option_config: Optional[dict] = None
@@ -288,23 +250,9 @@ class TradingEngine:
         self._stop_loss_rules = _j(strategy.stop_loss_rules, {}) or {}
         self._target_rules    = _j(strategy.target_rules, {}) or {}
 
-        pattern_obj = strategy.candle_pattern.to_dict() if strategy.candle_pattern else None
-        self._direction = (pattern_obj or {}).get('direction') or 'bullish'
-
-        # Config fields now live on strategy, not pattern
-        ind = _j(strategy.indicator_settings, {})
-        tf  = _j(strategy.trade_filters, {})
-        entry_conds = _j(strategy.entry_conditions, [])
-        # Merge entry_conditions into pattern dict so _check_pattern() still works
-        self._pattern = {**(pattern_obj or {}), 'entry_conditions': entry_conds}
-
-        self._needs_candles = bool(
-            entry_conds
-            or (ind and any((v or {}).get('enabled') for v in (ind.values() if isinstance(ind, dict) else [])))
-            or (tf and (tf.get('trend_day_filter') or {}).get('enabled'))
-            or self._stop_loss_rules.get('atr_multiplier')
-        )
-        self._candle_days_needed = _required_warmup(ind, tf)
+        if not strategy.swing_zone_config:
+            raise ValueError(f'Strategy {self.strategy_id} has no Swing Zone Config configured')
+        self._swing_config = strategy.swing_zone_config.to_dict()
 
         # Resume in-memory state from persisted columns
         self._phase = session.phase or 'monitoring'
@@ -341,9 +289,11 @@ class TradingEngine:
                     self.session_id, self._symbol, exc_info=True,
                 )
 
+        sc = self._swing_config
         self._log(
             f"Engine started — watching {self._symbol} on {self._exchange}"
-            + (f' | Pattern: {self._pattern.get("name")} ({self._direction})' if self._pattern else ''),
+            f" | Swing Zone: {sc.get('name')} ({sc.get('candle_size')}, {sc.get('period_days')}d, "
+            f"pivot={sc.get('pivot_bars')}, strong={sc.get('strong_level_pct')}%)",
             'info',
         )
 
@@ -424,6 +374,7 @@ class TradingEngine:
         self._remaining_qty = int(st.get('remaining') or 0)
         self._break_even_triggered = bool(st.get('break_even_triggered'))
         self._targets_hit = {t['index'] for t in (st.get('targets') or []) if t.get('hit')}
+        self._direction = st['direction']
 
     # ──────────────────────────────────────────────────────────────────────
     #  DB writers
@@ -489,30 +440,23 @@ class TradingEngine:
             logger.warning("LTP REST fetch failed for %s:%s", self._exchange, self._symbol, exc_info=True)
             return None
 
-    def _get_daily_candles(self) -> list:
+    def _get_swing_candles(self) -> list:
         now = time.time()
         if self._candles_cache and (now - self._candles_cache_ts) < _CANDLE_CACHE_TTL_SEC:
             return self._candles_cache
         cfg = KiteConfig.query.filter_by(user_id=self.user_id).first()
-        if not (cfg and cfg.is_connected and cfg.access_token_encrypted and self._instrument_token):
+        if not (cfg and cfg.is_connected and cfg.access_token_encrypted):
             return []
         try:
             from kiteconnect import KiteConnect
             kite = KiteConnect(api_key=decrypt(cfg.api_key_encrypted))
             kite.set_access_token(decrypt(cfg.access_token_encrypted))
-            now_ist = datetime.now(_IST).date()
-            from_d = now_ist - timedelta(days=self._candle_days_needed + 30)
-            raw = kite.historical_data(self._instrument_token, from_d.strftime('%Y-%m-%d'), now_ist.strftime('%Y-%m-%d'), 'day')
-            candles = [{
-                'date':   c['date'].strftime('%Y-%m-%d'),
-                'open':   c['open'], 'high': c['high'], 'low': c['low'],
-                'close':  c['close'], 'volume': c['volume'],
-            } for c in raw]
+            candles = fetch_candles_for_swing_config(kite, self._swing_config, self._symbol, self._exchange)
             self._candles_cache = candles
             self._candles_cache_ts = now
             return candles
         except Exception:
-            logger.warning("Daily candle fetch failed for session %d", self.session_id, exc_info=True)
+            logger.warning("Swing candle fetch failed for session %d", self.session_id, exc_info=True)
             return []
 
     # ──────────────────────────────────────────────────────────────────────
@@ -543,7 +487,7 @@ class TradingEngine:
         if self._phase == 'monitoring':
             self._eval_monitoring(ltp, prev_ltp)
         elif self._phase == 'in_position':
-            self._eval_in_position(ltp, prev_ltp)
+            self._eval_in_position(ltp)
         # exited / error: nothing to do but keep status alive until stop
 
         self._prev_ltp = ltp
@@ -560,57 +504,47 @@ class TradingEngine:
     # ──────────────────────────────────────────────────────────────────────
 
     def _eval_monitoring(self, ltp: float, prev_ltp: Optional[float]):
-        strategy_entry = (self._strategy_dict or {}).get('entry_condition') or {}
-        pattern_filters = self._strategy_dict.get('trade_filters') if self._strategy_dict else None
-        completed_today = self._completed_today()
+        # ── Live-recompute S&R levels and log a snapshot every tick ──────────
+        candles = self._get_swing_candles()
+        # Drop the developing latest candle — detect only on closed candles
+        closed_candles = candles[:-1] if candles else []
 
-        # ── Time-of-day & day-of-week (live-only filters) ────────────────────
-        now_ist = datetime.now(_IST)
-        if not _check_time_window(pattern_filters, now=now_ist):
-            return
-        if not _check_live_day_filter(pattern_filters, now=now_ist):
-            return
-        if not _check_daily_trade_limit(pattern_filters, completed_today):
+        pivot_bars = int(self._swing_config.get('pivot_bars') or 5)
+        if len(closed_candles) < pivot_bars * 2 + 1:
+            self._log(
+                f"Monitoring {self._symbol} @ ₹{ltp:,.2f} — gathering candles for swing-level "
+                f"detection ({len(closed_candles)}/{pivot_bars * 2 + 1})",
+                'info',
+            )
             return
 
-        # ── Candle-driven detection ──────────────────────────────────────────
-        closed_candles = []
-        if self._needs_candles:
-            raw = self._get_daily_candles()
-            # Drop the developing today's candle — detect only on closed
-            closed_candles = raw[:-1] if raw else []
+        levels = detect_sr_levels(closed_candles, pivot_bars)
+        self._log_level_snapshot(ltp, levels)
 
-            if not self._pattern_detected and len(closed_candles) >= 2:
-                pattern_ok = _check_pattern(self._pattern, closed_candles)
-                indicators_ok = _check_indicators(self._strategy_dict.get('indicator_settings'), closed_candles)
-                trend_ok = _check_trend_filter(pattern_filters, closed_candles)
-                if pattern_ok and indicators_ok and trend_ok:
-                    self._pattern_detected = True
-                    last_date = closed_candles[-1]['date']
-                    self._log(
-                        f'Pattern "{self._pattern.get("name", "")}" confirmed on closed candle {last_date} @ LTP ₹{ltp}',
-                        'success',
-                    )
-
-        # ── Loss-limit (uses session trade history) ──────────────────────────
-        prior_trades = self._completed_trades_summary()
-        if not _check_loss_limit(pattern_filters, prior_trades):
+        if prev_ltp is None:
             return
+
+        signal = evaluate_breakout(levels, self._swing_config.get('strong_level_pct'), prev_ltp, ltp)
+        if not signal:
+            return
+
+        det_candle = closed_candles[-1]
 
         # ── Pre-entry candle-size filter ─────────────────────────────────────
-        if closed_candles:
-            det = closed_candles[-1]
-            if not _check_candle_size(self._strategy_dict, det):
-                return
-
-        # ── Entry trigger (strategy-level price condition) ───────────────────
-        if self._needs_candles and not self._pattern_detected:
-            return
-        if not self._check_strategy_condition(strategy_entry, ltp, prev_ltp):
+        if not _check_candle_size(self._strategy_dict, det_candle):
             return
 
-        # Build plan and place entry
-        det_candle = closed_candles[-1] if closed_candles else {'low': ltp, 'high': ltp, 'close': ltp}
+        self._direction = signal['direction']
+        last_level = signal['last_level']
+        strong_level_type = 'RESISTANCE' if signal['direction'] == 'bullish' else 'SUPPORT'
+        self._log(
+            f"Breakout signal: {signal['direction']} thru strong {strong_level_type} "
+            f"₹{signal['level_price']} (nearest level ₹{signal['nearest_price']} on strong line, "
+            f"cluster of {signal['cluster_size']}; last level: {last_level['type']} @ ₹{last_level['price']}) "
+            f"@ LTP ₹{ltp}",
+            'success',
+        )
+        self._pattern_detected = True
 
         # Options leg: resolve the actual CE/PE contract, swap the engine over to
         # it, and use the option premium (not the index LTP) as the entry price.
@@ -659,11 +593,51 @@ class TradingEngine:
 
         self._persist_session_state()
 
+    def _log_level_snapshot(self, ltp: float, levels: list):
+        """Per-tick monitoring log — current LTP, last-formed level (trade bias),
+        and the nearest level on each side of price, flagged when it sits on a
+        strong cluster (the scanner's strong + nearest condition the entry
+        rule now requires)."""
+        last = find_last_level(levels)
+        if not last:
+            self._log(f"Monitoring {self._symbol} @ ₹{ltp:,.2f} — no swing levels detected yet", 'info')
+            return
+
+        bias = 'bullish' if last['type'] == 'RESISTANCE' else 'bearish'
+        classified = classify_by_ltp(levels, ltp)
+        strong = find_strong_levels(classified, self._swing_config.get('strong_level_pct'))
+        nearest = find_nearest_levels(classified, ltp)
+
+        def describe(nearest_level, clusters):
+            if not nearest_level:
+                return None
+            cluster = next(
+                (c for c in clusters
+                 if any(m['price'] == nearest_level['price'] for m in c['members'])),
+                None,
+            )
+            text = f"₹{nearest_level['price']:,.2f}"
+            if cluster:
+                text += f" (on strong line ₹{cluster['price']:,.2f})"
+            return text
+
+        parts = [
+            f"Monitoring {self._symbol} @ ₹{ltp:,.2f}",
+            f"last level {last['type']} @ ₹{last['price']:,.2f} (bias {bias})",
+        ]
+        res = describe(nearest['nearest_resistance'], strong['strong_resistance'])
+        sup = describe(nearest['nearest_support'], strong['strong_support'])
+        if res:
+            parts.append(f"nearest resistance {res}")
+        if sup:
+            parts.append(f"nearest support {sup}")
+        self._log(' | '.join(parts), 'info')
+
     # ──────────────────────────────────────────────────────────────────────
     #  In-position → exits
     # ──────────────────────────────────────────────────────────────────────
 
-    def _eval_in_position(self, ltp: float, prev_ltp: Optional[float]):
+    def _eval_in_position(self, ltp: float):
         plan = self._plan
         if not plan or self._remaining_qty <= 0:
             return
@@ -762,15 +736,6 @@ class TradingEngine:
                 self._remaining_qty = 0
                 self._complete_session(ltp)
                 return
-
-        # 5) Optional strategy-level exit_condition override
-        exit_cond = (self._strategy_dict or {}).get('exit_condition')
-        if exit_cond and self._check_strategy_condition(exit_cond, ltp, prev_ltp):
-            self._log(f"Exit condition triggered @ ₹{ltp:.2f}", 'warn')
-            self._place_exit_order(self._remaining_qty, ltp, reason='exit_condition')
-            self._remaining_qty = 0
-            self._complete_session(ltp)
-            return
 
         # Persist plan-state if any leg fired (SL trail / break-even may have updated SL)
         self._persist_session_state(ltp_changed=True)
@@ -999,40 +964,6 @@ class TradingEngine:
             else:
                 sl = min(sl, plan['entry_price'])
         return sl
-
-    def _check_strategy_condition(self, cond, ltp, prev_ltp) -> bool:
-        if not cond:
-            return False
-        t = cond.get('type') if isinstance(cond, dict) else None
-        v = cond.get('value') if isinstance(cond, dict) else None
-        if v is None:
-            return False
-        try:
-            v = float(v)
-        except (TypeError, ValueError):
-            return False
-        if t == 'price_above':      return ltp > v
-        if t == 'price_below':      return ltp < v
-        if t == 'price_cross_up':   return prev_ltp is not None and prev_ltp <= v < ltp
-        if t == 'price_cross_down': return prev_ltp is not None and prev_ltp >= v > ltp
-        return False
-
-    def _completed_today(self) -> int:
-        try:
-            today_ist = datetime.now(_IST).date()
-            # Count own session's filled SELLs (round-trip exits) as completed trades today
-            sells = PaperOrder.query.filter_by(
-                user_id=self.user_id, session_id=self.session_id,
-                transaction_type=PaperOrderType.SELL,
-                status=PaperOrderStatus.FILLED,
-            ).all() if self.mode == 'paper' else []
-            return sum(1 for o in sells if (o.fill_time or datetime.now(timezone.utc)).astimezone(_IST).date() == today_ist)
-        except Exception:
-            return 0
-
-    def _completed_trades_summary(self) -> list:
-        # Returns a coarse pnl_pct list for loss_limit eval
-        return []  # this engine fully exits before the next monitoring cycle, so loss-limit only matters across sessions
 
 
 # ──────────────────────────────────────────────────────────────────────────

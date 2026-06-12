@@ -1,22 +1,26 @@
 import json
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt_identity
 
-from app.extensions import db
 from app.models import KiteConfig
 from app.models.strategy import Strategy
 from app.models.user_strategy import UserStrategy
 from app.routes.decorators import customer_required
 from app.services.encryption import decrypt
+from app.services.swing_breakout import evaluate_breakout
+from app.services.swing_zone_detector import (
+    _BUFFER_DAYS,
+    _MAX_FETCH_DAYS,
+    detect_sr_levels,
+    fetch_candles_for_swing_config,
+)
 
 logger = logging.getLogger(__name__)
 
 customer_backtest_bp = Blueprint('customer_backtest', __name__)
-
-_IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def _j(val, default=None):
@@ -39,135 +43,6 @@ def _num(v, default=None):
         return default
 
 
-# ─── Candle-pattern logic (mirrors useStrategyExecutor.js) ────────────────────
-
-def _check_candle_condition(cond, candles):
-    if not candles or len(candles) < 2:
-        return False
-    cond = _j(cond, {})
-    if not isinstance(cond, dict):
-        return False
-    today = candles[-1]
-    prev  = candles[-2]
-    t     = cond.get('type', '')
-    v     = float(cond.get('value') or 0)
-
-    if t == 'bullish_candle':
-        if today['close'] <= today['open']:
-            return False
-        rng = today['high'] - today['low']
-        return True if rng <= 0 else (today['close'] - today['open']) / rng * 100 >= v
-
-    if t == 'bearish_candle':
-        if today['close'] >= today['open']:
-            return False
-        rng = today['high'] - today['low']
-        return True if rng <= 0 else (today['open'] - today['close']) / rng * 100 >= v
-
-    if t == 'gap_up':
-        return prev['close'] > 0 and (today['open'] - prev['close']) / prev['close'] * 100 >= v
-
-    if t == 'gap_down':
-        return prev['close'] > 0 and (prev['close'] - today['open']) / prev['close'] * 100 >= v
-
-    if t == 'bullish_engulfing':
-        return (prev['close'] < prev['open'] and today['close'] > today['open']
-                and today['open'] <= prev['close'] and today['close'] >= prev['open'])
-
-    if t == 'bearish_engulfing':
-        return (prev['close'] > prev['open'] and today['close'] < today['open']
-                and today['open'] >= prev['close'] and today['close'] <= prev['open'])
-
-    if t == 'hammer':
-        rng = today['high'] - today['low']
-        if rng <= 0:
-            return False
-        return (min(today['open'], today['close']) - today['low']) / rng * 100 >= (v or 60)
-
-    if t == 'shooting_star':
-        rng = today['high'] - today['low']
-        if rng <= 0:
-            return False
-        return (today['high'] - max(today['open'], today['close'])) / rng * 100 >= (v or 60)
-
-    if t == 'doji':
-        rng = today['high'] - today['low']
-        if rng <= 0:
-            return False
-        return abs(today['close'] - today['open']) / rng * 100 <= (v or 5)
-
-    if t == 'inside_bar':
-        return today['high'] <= prev['high'] and today['low'] >= prev['low']
-
-    if t == 'outside_bar':
-        return today['high'] > prev['high'] and today['low'] < prev['low']
-
-    if t == 'consolidation_breakout':
-        n = max(2, int(v or 3))
-        if len(candles) < n + 1:
-            return False
-        prev_n = candles[-(n + 1):-1]
-        max_h  = max(c['high'] for c in prev_n)
-        min_h  = min(c['high'] for c in prev_n)
-        rp     = (max_h - min_h) / min_h * 100 if min_h > 0 else 999
-        return rp <= 0.4 and today['high'] > max_h
-
-    if t == 'consolidation_breakdown':
-        n = max(2, int(v or 3))
-        if len(candles) < n + 1:
-            return False
-        prev_n = candles[-(n + 1):-1]
-        max_l  = max(c['low'] for c in prev_n)
-        min_l  = min(c['low'] for c in prev_n)
-        rp     = (max_l - min_l) / min_l * 100 if min_l > 0 else 999
-        return rp <= 0.4 and today['low'] < min_l
-
-    return False
-
-
-def _check_pattern(pattern, candles):
-    conds = _j((pattern or {}).get('entry_conditions', []), [])
-    if not isinstance(conds, list) or not conds:
-        return False
-    return all(_check_candle_condition(c, candles) for c in conds)
-
-
-def _calc_rsi(candles, period):
-    if len(candles) < period + 1:
-        return None
-    closes = [c['close'] for c in candles]
-    gains = losses = 0
-    for i in range(1, period + 1):
-        d = closes[i] - closes[i - 1]
-        if d > 0:
-            gains += d
-        else:
-            losses += abs(d)
-    ag, al = gains / period, losses / period
-    for i in range(period + 1, len(closes)):
-        d   = closes[i] - closes[i - 1]
-        ag  = (ag * (period - 1) + max(d, 0)) / period
-        al  = (al * (period - 1) + max(-d, 0)) / period
-    return 100 if al == 0 else 100 - 100 / (1 + ag / al)
-
-
-def _calc_ema(candles, period):
-    if len(candles) < period:
-        return None
-    closes = [c['close'] for c in candles]
-    k   = 2 / (period + 1)
-    ema = sum(closes[:period]) / period
-    for c in closes[period:]:
-        ema = c * k + ema * (1 - k)
-    return ema
-
-
-def _calc_sma(candles, period):
-    if len(candles) < period:
-        return None
-    return sum(c['close'] for c in candles[-period:]) / period
-
-
 def _calc_atr(candles, period=14):
     """Average True Range over the most recent `period` candles. Needs `period + 1` history."""
     if len(candles) < period + 1:
@@ -181,104 +56,6 @@ def _calc_atr(candles, period=14):
     return sum(trs[-period:]) / period
 
 
-def _check_indicators(settings, candles):
-    settings = _j(settings, {})
-    if not isinstance(settings, dict) or not settings:
-        return True
-    last = candles[-1]
-
-    rsi_cfg = _j(settings.get('rsi'), {}) or {}
-    if rsi_cfg.get('enabled'):
-        p   = int(rsi_cfg.get('period') or 14)
-        rsi = _calc_rsi(candles, p)
-        if rsi is None:
-            return False
-        mn, mx = float(rsi_cfg.get('min') or 0), float(rsi_cfg.get('max') or 100)
-        if not (mn <= rsi <= mx):
-            return False
-
-    ema_cfg = _j(settings.get('ema'), {}) or {}
-    if ema_cfg.get('enabled'):
-        p   = int(ema_cfg.get('period') or 20)
-        ema = _calc_ema(candles, p)
-        if ema is None:
-            return False
-        cond = ema_cfg.get('condition', 'price_above')
-        if cond == 'price_above' and last['close'] <= ema:
-            return False
-        if cond == 'price_below' and last['close'] >= ema:
-            return False
-
-    sma_cfg = _j(settings.get('sma'), {}) or {}
-    if sma_cfg.get('enabled'):
-        p   = int(sma_cfg.get('period') or 50)
-        sma = _calc_sma(candles, p)
-        if sma is None:
-            return False
-        cond = sma_cfg.get('condition', 'price_above')
-        if cond == 'price_above' and last['close'] <= sma:
-            return False
-        if cond == 'price_below' and last['close'] >= sma:
-            return False
-
-    vol_cfg = _j(settings.get('volume'), {}) or {}
-    if vol_cfg.get('enabled'):
-        p    = int(vol_cfg.get('period') or 20)
-        mult = float(vol_cfg.get('min_multiplier') or 1.5)
-        if len(candles) < p + 1:
-            return False
-        avg = sum(c['volume'] for c in candles[-(p + 1):-1]) / p
-        if last['volume'] < avg * mult:
-            return False
-
-    return True
-
-
-def _check_trend_filter(filters, candles):
-    filters = _j(filters, {})
-    tf = (filters if isinstance(filters, dict) else {}).get('trend_day_filter') or {}
-    if not tf.get('enabled'):
-        return True
-    mx     = int(tf.get('max_consecutive') or 3)
-    recent = candles[-(mx + 1):-1]
-    if len(recent) < mx:
-        return True
-    all_bull = all(c['close'] > c['open'] for c in recent)
-    all_bear = all(c['close'] < c['open'] for c in recent)
-    return not all_bull and not all_bear
-
-
-def _check_day_filter(filters, date_str):
-    """Day-of-week trade filter. UI uses Sun=0..Sat=6."""
-    filters = _j(filters, {})
-    df = (filters if isinstance(filters, dict) else {}).get('day_filter') or {}
-    if not df.get('enabled'):
-        return True
-    try:
-        d = datetime.strptime(date_str, '%Y-%m-%d')
-    except (TypeError, ValueError):
-        return True
-    js_weekday = (d.weekday() + 1) % 7  # Python Mon=0 → JS Sun=0
-    allowed = df.get('days') or [1, 2, 3, 4, 5]
-    return js_weekday in allowed
-
-
-def _check_loss_limit(filters, prior_trades):
-    """Block entries after N consecutive losing trades."""
-    filters = _j(filters, {})
-    ll = (filters if isinstance(filters, dict) else {}).get('loss_limit') or {}
-    if not ll.get('enabled'):
-        return True
-    mx = int(ll.get('max_consecutive_losses') or 2)
-    consec = 0
-    for t in reversed(prior_trades):
-        if t['pnl_pct'] < 0:
-            consec += 1
-        else:
-            break
-    return consec < mx
-
-
 def _check_candle_size(strategy_dict, det_candle):
     """Pre-entry filter: reject if detection candle range exceeds max % of close."""
     sl_rules = _j(strategy_dict.get('stop_loss_rules'), {}) or {}
@@ -290,21 +67,6 @@ def _check_candle_size(strategy_dict, det_candle):
         return True
     rng_pct = (det_candle['high'] - det_candle['low']) / close * 100
     return rng_pct <= max_pct
-
-
-def _required_warmup(indicator_settings, trade_filters):
-    needed = 15  # ATR(14) needs 15 candles
-    indicator_settings = _j(indicator_settings, {})
-    if isinstance(indicator_settings, dict):
-        for key, default in [('rsi', 14), ('ema', 20), ('sma', 50), ('volume', 20)]:
-            cfg = _j(indicator_settings.get(key), {}) or {}
-            if cfg.get('enabled'):
-                needed = max(needed, int(cfg.get('period') or default) + 5)
-    trade_filters = _j(trade_filters, {})
-    tf = (trade_filters if isinstance(trade_filters, dict) else {}).get('trend_day_filter') or {}
-    if tf.get('enabled'):
-        needed = max(needed, int(tf.get('max_consecutive') or 3) + 5)
-    return min(needed, 100)
 
 
 # ─── Trade plan resolver ──────────────────────────────────────────────────────
@@ -563,66 +325,63 @@ def _summarize_fills(fills, entry_price, direction):
     return qty_total, vwap, reason, pnl, pnl_pct
 
 
-# ─── Core simulation ──────────────────────────────────────────────────────────
+# ─── Swing-level breakout simulation ──────────────────────────────────────────
 
-def _simulate(strategy_dict, all_candles):
-    pattern   = _j(strategy_dict.get('candle_pattern'), {}) or {}
-    direction = pattern.get('direction', 'bullish')
-    ind_cfg   = _j(strategy_dict.get('indicator_settings'), {})
-    trade_cfg = _j(strategy_dict.get('trade_filters'), {})
-    # Merge entry_conditions into pattern dict for _check_pattern() compat
-    pattern   = {**pattern, 'entry_conditions': _j(strategy_dict.get('entry_conditions'), [])}
-    warmup    = _required_warmup(ind_cfg, trade_cfg)
-    quantity  = int(strategy_dict.get('quantity') or 1)
+def _rolling_window(all_candles, i, period_days):
+    """Candles within `period_days` of all_candles[i]['date'], inclusive, up to index i."""
+    end_dt = datetime.strptime(all_candles[i]['date'], '%Y-%m-%d %H:%M:%S')
+    start_dt = end_dt - timedelta(days=period_days)
+    return [
+        c for c in all_candles[:i + 1]
+        if datetime.strptime(c['date'], '%Y-%m-%d %H:%M:%S') >= start_dt
+    ]
+
+
+def _simulate_swing_breakout(strategy_dict, swing_config, all_candles):
+    """Walk forward over swing-config-granularity candles, recomputing S&R levels
+    on a rolling `period_days` window and entering on the same breakout signal
+    the live engine uses (`evaluate_breakout`)."""
+    pivot_bars  = int(swing_config.get('pivot_bars') or 5)
+    strong_pct  = swing_config.get('strong_level_pct')
+    period_days = int(swing_config.get('period_days') or 30)
+    quantity    = int(strategy_dict.get('quantity') or 1)
 
     detections = []
-    trades     = []
+    trades = []
 
-    i = warmup
-    while i < len(all_candles):
-        det_window = all_candles[:i + 1]
+    i = 1
+    while i < len(all_candles) - 1:
+        window = _rolling_window(all_candles, i, period_days)
+        if len(window) < pivot_bars * 2 + 1:
+            i += 1
+            continue
 
-        # Pattern + indicator + trend filter (all evaluated on closed candles ≤ i)
-        pattern_ok = _check_pattern(pattern, det_window) and _check_indicators(ind_cfg, det_window) and _check_trend_filter(trade_cfg, det_window)
-
-        if not pattern_ok:
+        levels = detect_sr_levels(window, pivot_bars)
+        signal = evaluate_breakout(levels, strong_pct, all_candles[i - 1]['close'], all_candles[i]['close'])
+        if not signal:
             i += 1
             continue
 
         det = all_candles[i]
+        direction = signal['direction']
         detections.append({
-            'date': det['date'], 'candle': det,
-            'pattern_name': pattern.get('name', 'Pattern'),
+            'date': det['date'],
+            'candle': det,
+            'pattern_name': f"{direction.upper()} Breakout",
+            'level_price': signal['level_price'],
         })
 
-        # Need a next-day candle to enter on
-        if i + 1 >= len(all_candles):
+        if not _check_candle_size(strategy_dict, det):
             i += 1
             continue
 
         entry_c = all_candles[i + 1]
         entry_price = entry_c['open']
 
-        # Live-parity pre-entry filters — block entry but keep the detection recorded
-        if not _check_day_filter(trade_cfg, entry_c['date']):
-            i += 1
-            continue
-        if not _check_loss_limit(trade_cfg, trades):
-            i += 1
-            continue
-        if not _check_candle_size(strategy_dict, det):
-            i += 1
-            continue
-
-        # Resolve the full plan, then simulate exits across all subsequent candles
-        plan = _build_trade_plan(strategy_dict, det_window, entry_price, det, direction)
-        # Exit walk starts at entry day itself — same-day SL/TP is realistic
+        plan = _build_trade_plan(strategy_dict, window, entry_price, det, direction)
         candles_after = all_candles[i + 1:]
         fills = _simulate_exits(plan, quantity, candles_after)
-
         qty_total, vwap_exit, reason, pnl, pnl_pct = _summarize_fills(fills, entry_price, direction)
-
-        # Find the last fill's date for headline exit_date
         last_fill_date = fills[-1]['date'] if fills else entry_c['date']
 
         trades.append({
@@ -635,6 +394,7 @@ def _simulate(strategy_dict, all_candles):
             'pnl':            round(pnl, 2),
             'pnl_pct':        round(pnl_pct, 2),
             'direction':      direction.upper(),
+            'level_price':    signal['level_price'],
             'fills':          [
                 {
                     'qty':    int(f['qty']),
@@ -648,7 +408,6 @@ def _simulate(strategy_dict, all_candles):
         # Advance to candle right after the last fill so we don't double-enter
         last_fill_index = i + 1
         if fills:
-            # find the candle index matching last fill date
             for j in range(i + 1, len(all_candles)):
                 if all_candles[j]['date'] == fills[-1]['date']:
                     last_fill_index = j
@@ -658,24 +417,19 @@ def _simulate(strategy_dict, all_candles):
     return detections, trades
 
 
-def _simulate_options(strategy_dict, all_candles, kite, option_config):
+def _simulate_swing_breakout_options(strategy_dict, swing_config, all_candles, kite, option_config):
     """
-    Options-mode backtest. Pattern detection runs on the underlying candles, but
-    each entry is simulated against the historical premium series of the
-    resolved CE/PE contract. Detection days where no live NFO/BFO contract can
+    Options-mode backtest. Breakout detection runs on the underlying candles, but
+    each entry is simulated against the historical daily premium series of the
+    resolved CE/PE contract. Detection candles where no live NFO/BFO contract can
     be resolved are returned in `skipped_dates`.
     """
     from app.services.option_resolver import resolve_option_contract
-    from datetime import datetime as _dt
 
-    pattern   = _j(strategy_dict.get('candle_pattern'), {}) or {}
-    direction = pattern.get('direction', 'bullish')
-    ind_cfg   = _j(strategy_dict.get('indicator_settings'), {})
-    trade_cfg = _j(strategy_dict.get('trade_filters'), {})
-    # Merge entry_conditions into pattern dict for _check_pattern() compat
-    pattern   = {**pattern, 'entry_conditions': _j(strategy_dict.get('entry_conditions'), [])}
-    warmup    = _required_warmup(ind_cfg, trade_cfg)
-    quantity  = int(strategy_dict.get('quantity') or 1)
+    pivot_bars  = int(swing_config.get('pivot_bars') or 5)
+    strong_pct  = swing_config.get('strong_level_pct')
+    period_days = int(swing_config.get('period_days') or 30)
+    quantity    = int(strategy_dict.get('quantity') or 1)
 
     underlying       = (option_config or {}).get('underlying', 'NIFTY')
     strike_selection = (option_config or {}).get('strike_selection', 'ATM')
@@ -685,45 +439,38 @@ def _simulate_options(strategy_dict, all_candles, kite, option_config):
     trades        = []
     skipped_dates = []
 
-    i = warmup
-    while i < len(all_candles):
-        det_window = all_candles[:i + 1]
+    i = 1
+    while i < len(all_candles) - 1:
+        window = _rolling_window(all_candles, i, period_days)
+        if len(window) < pivot_bars * 2 + 1:
+            i += 1
+            continue
 
-        pattern_ok = (
-            _check_pattern(pattern, det_window)
-            and _check_indicators(ind_cfg, det_window)
-            and _check_trend_filter(trade_cfg, det_window)
-        )
-        if not pattern_ok:
+        levels = detect_sr_levels(window, pivot_bars)
+        signal = evaluate_breakout(levels, strong_pct, all_candles[i - 1]['close'], all_candles[i]['close'])
+        if not signal:
             i += 1
             continue
 
         det = all_candles[i]
+        direction = signal['direction']
         detections.append({
-            'date': det['date'], 'candle': det,
-            'pattern_name': pattern.get('name', 'Pattern'),
+            'date': det['date'],
+            'candle': det,
+            'pattern_name': f"{direction.upper()} Breakout",
+            'level_price': signal['level_price'],
         })
 
-        if i + 1 >= len(all_candles):
+        if not _check_candle_size(strategy_dict, det):
             i += 1
             continue
 
         entry_c = all_candles[i + 1]
 
-        if not _check_day_filter(trade_cfg, entry_c['date']):
-            i += 1
-            continue
-        if not _check_loss_limit(trade_cfg, trades):
-            i += 1
-            continue
-        if not _check_candle_size(strategy_dict, det):
-            i += 1
-            continue
-
-        # Resolve the option contract as of the detection day (using detection
-        # close as the underlying LTP — entry happens at next-day open).
+        # Resolve the option contract as of the detection candle (using detection
+        # close as the underlying LTP — entry happens on the next candle's open).
         try:
-            det_date = _dt.strptime(det['date'], '%Y-%m-%d').date()
+            det_date = datetime.strptime(det['date'][:10], '%Y-%m-%d').date()
         except Exception:
             skipped_dates.append(det['date'])
             i += 1
@@ -741,8 +488,8 @@ def _simulate_options(strategy_dict, all_candles, kite, option_config):
 
         # Pull option premium daily candles from entry day through contract expiry
         try:
-            entry_date = _dt.strptime(entry_c['date'], '%Y-%m-%d').date()
-            expiry_date = _dt.strptime(contract['expiry'], '%Y-%m-%d').date()
+            entry_date  = datetime.strptime(entry_c['date'][:10], '%Y-%m-%d').date()
+            expiry_date = datetime.strptime(contract['expiry'], '%Y-%m-%d').date()
             premium_raw = kite.historical_data(
                 contract['instrument_token'],
                 entry_date.strftime('%Y-%m-%d'),
@@ -770,7 +517,7 @@ def _simulate_options(strategy_dict, all_candles, kite, option_config):
         entry_price = premium_candles[0]['open']
         # Long option position regardless of underlying direction
         plan_det_candle = {'low': 0.0, 'high': float('inf'), 'close': entry_price}
-        plan = _build_trade_plan(strategy_dict, det_window, entry_price, plan_det_candle, 'bullish')
+        plan = _build_trade_plan(strategy_dict, window, entry_price, plan_det_candle, 'bullish')
         fills = _simulate_exits(plan, quantity, premium_candles)
         qty_total, vwap_exit, reason, pnl, pnl_pct = _summarize_fills(fills, entry_price, 'bullish')
         last_fill_date = fills[-1]['date'] if fills else entry_c['date']
@@ -785,6 +532,7 @@ def _simulate_options(strategy_dict, all_candles, kite, option_config):
             'pnl':            round(pnl, 2),
             'pnl_pct':        round(pnl_pct, 2),
             'direction':      direction.upper(),
+            'level_price':    signal['level_price'],
             'instrument':     contract['tradingsymbol'],
             'exchange':       contract['exchange'],
             'option_strike':  contract['strike'],
@@ -796,11 +544,12 @@ def _simulate_options(strategy_dict, all_candles, kite, option_config):
             ],
         })
 
-        # Advance past last fill date in the underlying timeline
+        # Advance past last fill date in the underlying timeline (premium dates are
+        # day-only; compare against the date portion of the underlying candle date)
         last_fill_index = i + 1
         if fills:
             for j in range(i + 1, len(all_candles)):
-                if all_candles[j]['date'] == fills[-1]['date']:
+                if all_candles[j]['date'][:10] == fills[-1]['date']:
                     last_fill_index = j
                     break
         i = last_fill_index + 1
@@ -833,13 +582,17 @@ def run_backtest():
     if not strategy:
         return jsonify({'error': 'Strategy not found'}), 404
 
+    if not strategy.swing_zone_config_id:
+        return jsonify({'error': 'Strategy has no Swing Zone Config — edit the strategy first'}), 400
+
+    swing_config = strategy.swing_zone_config
+
     config = KiteConfig.query.filter_by(user_id=user_id).first()
     if not (config and config.is_connected and config.access_token_encrypted):
         return jsonify({'error': 'Kite not connected — connect your Kite account to run backtests'}), 400
 
     try:
         from kiteconnect import KiteConnect
-        from app.routes.customer.market import _resolve_token
         from app.services.option_resolver import meta_for as _option_meta_for
 
         kite = KiteConnect(api_key=decrypt(config.api_key_encrypted))
@@ -858,48 +611,41 @@ def run_backtest():
             candle_symbol   = strategy.instrument
             candle_exchange = strategy.exchange.value if hasattr(strategy.exchange, 'value') else str(strategy.exchange)
 
-        token = _resolve_token(candle_symbol, candle_exchange, kite)
-        if not token:
-            return jsonify({'error': f'{candle_exchange}:{candle_symbol} not found — refresh instruments'}), 404
+        candle_size = swing_config.candle_size
+        max_extra = _MAX_FETCH_DAYS.get(candle_size, 400) - _BUFFER_DAYS.get(candle_size, 40) - swing_config.period_days
+        days = min(days, max(max_extra, 1))
 
-        now_ist   = datetime.now(_IST)
-        to_date   = now_ist.date()
-        from_date = to_date - timedelta(days=days + 120)  # extra for warmup
-
-        raw = kite.historical_data(
-            token,
-            from_date.strftime('%Y-%m-%d'),
-            to_date.strftime('%Y-%m-%d'),
-            'day',
+        all_candles = fetch_candles_for_swing_config(
+            kite, swing_config.to_dict(), candle_symbol, candle_exchange, extra_days=days,
         )
 
-        all_candles = [{
-            'date':   c['date'].strftime('%Y-%m-%d'),
-            'open':   c['open'],
-            'high':   c['high'],
-            'low':    c['low'],
-            'close':  c['close'],
-            'volume': c['volume'],
-        } for c in raw]
-
-        if len(all_candles) < 5:
+        if len(all_candles) < swing_config.pivot_bars * 2 + 1:
             return jsonify({'error': 'Not enough historical data for this instrument'}), 400
 
+        swing_config_dict = swing_config.to_dict()
         strategy_dict = strategy.to_dict()
-        pattern       = strategy_dict.get('candle_pattern') or {}
-        warmup        = _required_warmup(
-            strategy_dict.get('indicator_settings'),
-            strategy_dict.get('trade_filters'),
-        )
-
-        # Keep days + warmup candles so first day in simulation window has proper history
-        sim_candles = all_candles[-(days + warmup):]
 
         if options_mode:
-            detections, trades, skipped_dates = _simulate_options(strategy_dict, sim_candles, kite, option_config)
+            detections, trades, skipped_dates = _simulate_swing_breakout_options(
+                strategy_dict, swing_config_dict, all_candles, kite, option_config,
+            )
         else:
-            detections, trades = _simulate(strategy_dict, sim_candles)
+            detections, trades = _simulate_swing_breakout(strategy_dict, swing_config_dict, all_candles)
             skipped_dates = []
+
+        # Restrict the report window to the requested `days` ending at the last candle
+        last_dt = datetime.strptime(all_candles[-1]['date'], '%Y-%m-%d %H:%M:%S')
+        cutoff_dt = last_dt - timedelta(days=days)
+        report_candles = [
+            c for c in all_candles
+            if datetime.strptime(c['date'], '%Y-%m-%d %H:%M:%S') >= cutoff_dt
+        ]
+        if not report_candles:
+            report_candles = all_candles
+
+        cutoff_str = report_candles[0]['date']
+        detections = [d for d in detections if d['date'] >= cutoff_str]
+        trades     = [t for t in trades if t['entry_date'] >= cutoff_str]
 
         winning  = [t for t in trades if t['pnl_pct'] > 0]
         losing   = [t for t in trades if t['pnl_pct'] <= 0]
@@ -916,10 +662,8 @@ def run_backtest():
         accuracy    = round(len(winning) / len(trades) * 100, 1) if trades else 0
         avg_pnl_pct = round(sum(t['pnl_pct'] for t in trades) / len(trades), 2) if trades else 0
 
-        # Period covers the requested days (exclude warmup)
-        report_candles = sim_candles[warmup:]
-        period_from = report_candles[0]['date']  if report_candles else from_date.strftime('%Y-%m-%d')
-        period_to   = report_candles[-1]['date'] if report_candles else to_date.strftime('%Y-%m-%d')
+        period_from = report_candles[0]['date']
+        period_to   = report_candles[-1]['date']
 
         return jsonify({
             'strategy':           strategy_dict,

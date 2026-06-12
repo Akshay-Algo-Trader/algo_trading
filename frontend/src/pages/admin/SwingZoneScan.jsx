@@ -4,7 +4,7 @@ import axiosInstance from '../../api/axiosInstance'
 import {
   Card, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
-import SRChart from '../../components/admin/SwingZoneChart'
+import SRChart, { classifyByLtp } from '../../components/admin/SwingZoneChart'
 
 const SIZE_LABELS = { '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
 const PERIOD_OPTIONS = [1, 7, 10, 30, 60, 90]
@@ -29,6 +29,17 @@ export default function SwingZoneScan() {
   const [scanError, setScanError] = useState('')
   const [scanResult, setScanResult] = useState(null)
   const [summary, setSummary] = useState(null)
+
+  const [currentPrice, setCurrentPrice] = useState(null)
+
+  useEffect(() => {
+    if (!scanResult?.instrument) return
+    axiosInstance.get('/api/admin/instruments/price', {
+      params: { symbol: scanResult.instrument, exchange: scanResult.exchange },
+    })
+      .then(r => setCurrentPrice(r.data?.ltp ?? null))
+      .catch(() => setCurrentPrice(null))
+  }, [scanResult?.instrument, scanResult?.exchange])
 
   const [history, setHistory] = useState([])
   const [histLoading, setHistLoading] = useState(false)
@@ -84,7 +95,7 @@ export default function SwingZoneScan() {
     )
   }
 
-  const levels = scanResult?.levels_detected ?? []
+  const levels = classifyByLtp(scanResult?.levels_detected ?? [], currentPrice)
   const resistance = levels.filter(l => l.type === 'RESISTANCE')
   const support = levels.filter(l => l.type === 'SUPPORT')
 
@@ -131,6 +142,7 @@ export default function SwingZoneScan() {
                 <option value="NSE">NSE</option>
                 <option value="BSE">BSE</option>
                 <option value="NFO">NFO</option>
+                <option value="MCX">MCX</option>
               </Select>
             </FormField>
           </div>
@@ -154,8 +166,8 @@ export default function SwingZoneScan() {
           <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
             {[
               ['Total Levels', summary.total_levels],
-              ['Resistance', summary.resistance],
-              ['Support', summary.support],
+              ['Resistance', resistance.length],
+              ['Support', support.length],
               ['Period', `${summary.period.from?.slice(0, 10)} → ${summary.period.to?.slice(0, 10)}`],
             ].map(([label, value]) => (
               <div key={label} className="rounded-lg bg-gray-50 border border-gray-200 p-3">
@@ -177,6 +189,8 @@ export default function SwingZoneScan() {
             candleSize={scanResult.candle_size}
             periodFrom={scanResult.period.from}
             periodTo={scanResult.period.to}
+            strongPct={cfg.strong_level_pct}
+            currentPrice={currentPrice}
           />
         </Card>
       )}
