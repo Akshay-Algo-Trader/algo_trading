@@ -17,6 +17,8 @@ from app.routes.decorators import admin_required
 from app.routes.customer.backtest import (
     _BUFFER_DAYS,
     _MAX_FETCH_DAYS,
+    _attach_trade_charts,
+    _build_chart,
     _simulate_swing_breakout,
     _simulate_swing_breakout_options,
     fetch_candles_for_swing_config,
@@ -126,9 +128,22 @@ def run_admin_backtest():
         total_pnl   = round(sum(t['pnl'] for t in trades), 2)
         accuracy    = round(len(winning) / len(trades) * 100, 1) if trades else 0
         avg_pnl_pct = round(sum(t['pnl_pct'] for t in trades) / len(trades), 2) if trades else 0
+        avg_entry_price = round(sum(t['entry_price'] for t in trades) / len(trades), 2) if trades else 0
 
         period_from = report_candles[0]['date']
         period_to   = report_candles[-1]['date']
+
+        chart = _build_chart(
+            report_candles, trades,
+            symbol=candle_symbol, exchange=candle_exchange,
+            candle_size=candle_size, options_mode=options_mode,
+        )
+        _attach_trade_charts(
+            all_candles, trades,
+            symbol=candle_symbol, exchange=candle_exchange,
+            candle_size=candle_size, options_mode=options_mode,
+            swing_config=swing_config_dict,
+        )
 
         return jsonify({
             'strategy':           strategy_dict,
@@ -137,6 +152,7 @@ def run_admin_backtest():
             'pattern_detections': detections,
             'trades':             trades,
             'skipped_dates':      skipped_dates,
+            'chart':              chart,
             'summary': {
                 'total_patterns_identified': len(detections),
                 'total_trades_executed':     len(trades),
@@ -147,6 +163,7 @@ def run_admin_backtest():
                 'accuracy_pct':              accuracy,
                 'total_pnl':                 total_pnl,
                 'avg_pnl_pct':               avg_pnl_pct,
+                'avg_entry_price':           avg_entry_price,
             },
         }), 200
 

@@ -1,6 +1,6 @@
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt_identity
@@ -10,7 +10,12 @@ from app.models.strategy import Strategy
 from app.models.user_strategy import UserStrategy
 from app.routes.decorators import customer_required
 from app.services.encryption import decrypt
-from app.services.swing_breakout import evaluate_breakout
+from app.services.swing_breakout import (
+    classify_by_ltp,
+    evaluate_breakout,
+    find_nearest_levels,
+    find_strong_levels,
+)
 from app.services.swing_zone_detector import (
     _BUFFER_DAYS,
     _MAX_FETCH_DAYS,
@@ -141,6 +146,8 @@ def _build_trade_plan(strategy_dict, candles_at_entry, entry_price, det_candle, 
         'targets': targets,
         'partial_book': partial_book,
         'atr_used': atr_mult is not None and base_sl_dist != entry_price * sl_pct / 100,
+        'trade_type':      strategy_dict.get('trade_type') or 'swing',
+        'exit_after_days': _num(strategy_dict.get('exit_after_days')),
     }
 
 
@@ -155,6 +162,33 @@ def _split_qty(remaining, targets_left):
     return max(1, remaining // targets_left)
 
 
+def _apply_time_window(plan, candles):
+    """Trim the candles a trade may be exited over to its allowed holding window,
+    and return the reason to use if the position survives to the window's end.
+
+    - intraday: only the entry-day candles → square off at that day's close.
+    - swing with `exit_after_days`: only candles up to entry_day + N → force-exit.
+    - swing uncapped: all candles unchanged (closes at end_of_period as before).
+
+    Works for both equity ('%Y-%m-%d %H:%M:%S') and option-premium ('%Y-%m-%d')
+    candles since the day is taken from `date[:10]`.
+    """
+    if not candles:
+        return candles, 'end_of_period'
+    entry_day = candles[0]['date'][:10]
+    if (plan.get('trade_type') or 'swing') == 'intraday':
+        same = [c for c in candles if c['date'][:10] == entry_day]
+        return same, 'eod_square_off'
+    n = plan.get('exit_after_days')
+    if n and n > 0:
+        ed = datetime.strptime(entry_day, '%Y-%m-%d').date()
+        limit = ed + timedelta(days=int(n))
+        win = [c for c in candles
+               if datetime.strptime(c['date'][:10], '%Y-%m-%d').date() <= limit]
+        return win, ('time_exit' if len(win) < len(candles) else 'end_of_period')
+    return candles, 'end_of_period'
+
+
 def _simulate_exits(plan, total_qty, candles_after_entry):
     """
     Walk forward candle-by-candle, returning a list of fills.
@@ -165,6 +199,8 @@ def _simulate_exits(plan, total_qty, candles_after_entry):
     direction = plan['direction']
     sign      = plan['sign']
     entry     = plan['entry_price']
+
+    candles_after_entry, flush_reason = _apply_time_window(plan, candles_after_entry)
 
     hwm = entry  # high water mark — bullish trail anchor
     lwm = entry  # low water mark  — bearish trail anchor
@@ -289,12 +325,12 @@ def _simulate_exits(plan, total_qty, candles_after_entry):
                 remaining = 0
                 break
 
-    # End-of-period flush
+    # End-of-window flush (period end, intraday square-off, or swing time-exit)
     if remaining > 0 and candles_after_entry:
         last = candles_after_entry[-1]
         fills.append({
             'qty': remaining, 'price': last['close'],
-            'date': last['date'], 'reason': 'end_of_period',
+            'date': last['date'], 'reason': flush_reason,
         })
 
     return fills
@@ -569,6 +605,261 @@ def _simulate_swing_breakout_options(strategy_dict, swing_config, all_candles, k
     return detections, trades, skipped_dates
 
 
+# ─── Chart payload ────────────────────────────────────────────────────────────
+
+def _epoch(date_str):
+    """IST wall-clock string → epoch, reinterpreted as UTC so lightweight-charts
+    (which renders numeric timestamps in UTC) shows the correct IST time.
+    Accepts the full '%Y-%m-%d %H:%M:%S' candle date or a date-only premium date."""
+    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d'):
+        try:
+            dt = datetime.strptime(date_str, fmt)
+            return int(dt.replace(tzinfo=timezone.utc).timestamp())
+        except (ValueError, TypeError):
+            continue
+    return None
+
+
+def _snap(times, t):
+    """Snap epoch `t` to the latest candle time at/before it so a marker always
+    lands on an existing bar (option exit dates are day-only and won't match an
+    intraday candle time exactly)."""
+    if t is None or not times:
+        return t
+    snapped = times[0]
+    for ct in times:
+        if ct <= t:
+            snapped = ct
+        else:
+            break
+    return snapped
+
+
+def _sr_lines_for_window(candles, swing_config, ref_price):
+    """The support/resistance lines drawn by the live SRChart, computed for a
+    candle window: strong clusters (solid), the nearest level each side, and the
+    outermost max-resistance / min-support bounds (dashed). Mirrors the line set
+    in SwingZoneChart.jsx so the backtest chart matches the live preview.
+
+    `ref_price` (the window's last close) classifies each level as resistance
+    (above) or support (below), exactly as LTP does live."""
+    if not swing_config or not candles or ref_price is None:
+        return []
+    pivot_bars = int(swing_config.get('pivot_bars') or 5)
+    strong_pct = swing_config.get('strong_level_pct')
+    levels = detect_sr_levels(candles, pivot_bars)
+    if not levels:
+        return []
+    classified = classify_by_ltp(levels, ref_price)
+    strong = find_strong_levels(classified, strong_pct)
+    nearest = find_nearest_levels(classified, ref_price)
+
+    lines = {}
+    def add(price, ltype, tag):
+        key = round(price, 2)
+        if key in lines:
+            lines[key]['tags'].add(tag)
+        else:
+            lines[key] = {'price': key, 'type': ltype, 'tags': {tag}}
+
+    # Strong = multi-level clusters (the extreme single-member bounds that
+    # find_strong_levels also returns are added below as Max/Min instead).
+    for c in strong['strong_resistance']:
+        if not c.get('extreme'):
+            add(c['price'], 'RESISTANCE', 'Strong')
+    for c in strong['strong_support']:
+        if not c.get('extreme'):
+            add(c['price'], 'SUPPORT', 'Strong')
+    if nearest['nearest_resistance']:
+        add(nearest['nearest_resistance']['price'], 'RESISTANCE', 'Nearest')
+    if nearest['nearest_support']:
+        add(nearest['nearest_support']['price'], 'SUPPORT', 'Nearest')
+    resistances = [l['price'] for l in classified if l['type'] == 'RESISTANCE']
+    supports    = [l['price'] for l in classified if l['type'] == 'SUPPORT']
+    if resistances:
+        add(max(resistances), 'RESISTANCE', 'Max')
+    if supports:
+        add(min(supports), 'SUPPORT', 'Min')
+
+    return [
+        {'price': v['price'], 'type': v['type'],
+         'tags': sorted(v['tags']), 'strong': 'Strong' in v['tags']}
+        for v in lines.values()
+    ]
+
+
+def _build_chart(report_candles, trades, *, symbol, exchange, candle_size, options_mode):
+    """Assemble the all-trades visualisation payload: OHLC candles (at the swing
+    config's candle size), the breakout levels that triggered entries, and the
+    entry/exit markers carrying booked P&L. The strong / nearest / max-min S&R
+    set is intentionally NOT drawn here — it differs per entry, so it belongs on
+    the focused per-trade charts, not on this aggregate view."""
+    candles = [{
+        'time': _epoch(c['date']),
+        'open': c['open'], 'high': c['high'], 'low': c['low'], 'close': c['close'],
+    } for c in report_candles]
+    candles = [c for c in candles if c['time'] is not None]
+    times = [c['time'] for c in candles]
+
+    # Distinct breakout levels — a bullish breakout broke a resistance (drawn red),
+    # a bearish breakout broke a support (drawn green).
+    seen = set()
+    level_lines = []
+    for t in trades:
+        lp = t.get('level_price')
+        if lp is None:
+            continue
+        is_bull = t['direction'] == 'BULLISH'
+        key = (round(lp, 2), is_bull)
+        if key in seen:
+            continue
+        seen.add(key)
+        level_lines.append({'price': round(lp, 2), 'type': 'RESISTANCE' if is_bull else 'SUPPORT'})
+
+    markers = []
+    for idx, t in enumerate(trades, 1):
+        is_bull = t['direction'] == 'BULLISH'
+        entry_t = _snap(times, _epoch(t['entry_date']))
+        exit_t = _snap(times, _epoch(t['exit_date']))
+        if entry_t is not None:
+            markers.append({
+                'time': entry_t,
+                'position': 'belowBar' if is_bull else 'aboveBar',
+                'color': '#2563eb',
+                'shape': 'arrowUp' if is_bull else 'arrowDown',
+                'text': f"#{idx} Entry ₹{t['entry_price']}",
+            })
+        if exit_t is not None:
+            win = t['pnl'] >= 0
+            sign = '+' if t['pnl_pct'] >= 0 else ''
+            markers.append({
+                'time': exit_t,
+                'position': 'aboveBar' if is_bull else 'belowBar',
+                'color': '#16a34a' if win else '#dc2626',
+                'shape': 'circle',
+                'text': f"#{idx} Exit ₹{t['exit_price']} ({sign}{t['pnl_pct']}%)",
+            })
+    markers.sort(key=lambda m: m['time'])
+
+    return {
+        'candles': candles,
+        'level_lines': level_lines,
+        'markers': markers,
+        'symbol': symbol,
+        'exchange': exchange,
+        'candle_size': candle_size,
+        'options_mode': options_mode,
+    }
+
+
+_TP_REASONS = {'take_profit', 'take_profit_t1', 'take_profit_t2', 'take_profit_t3', 'partial_book', 'multi_target'}
+_SL_REASONS = {'stop_loss', 'first_candle_violated', 'partial_then_sl'}
+_REASON_SHORT = {
+    'stop_loss': 'SL', 'take_profit': 'TP',
+    'take_profit_t1': 'T1', 'take_profit_t2': 'T2', 'take_profit_t3': 'T3',
+    'partial_book': 'Partial', 'first_candle_violated': 'Struct SL',
+    'end_of_period': 'Period End',
+    'eod_square_off': 'EOD', 'time_exit': 'Time',
+}
+
+
+def _attach_trade_charts(all_candles, trades, *, symbol, exchange, candle_size, options_mode, swing_config=None, pad=5):
+    """Attach a per-trade chart to every trade, spanning the swing look-back
+    period: the `period_days` of candles the simulator scanned to detect levels
+    at this entry, carried through to the trade's exit. Each chart shows the S&R
+    level set as of entry (strong / nearest / max-min), the broken level, and the
+    entry arrow + an exit marker per fill leg. Candle size is the swing config's,
+    since the whole backtest runs on those candles."""
+    period_days = int((swing_config or {}).get('period_days') or 30)
+
+    candles = [{
+        'time': _epoch(c['date']),
+        'open': c['open'], 'high': c['high'], 'low': c['low'], 'close': c['close'],
+    } for c in all_candles]
+    times = [c['time'] for c in candles]
+    date_index = {c['date']: i for i, c in enumerate(all_candles)}
+
+    for t in trades:
+        is_bull = t['direction'] == 'BULLISH'
+        entry_t = _snap(times, _epoch(t['entry_date']))
+        exit_t  = _snap(times, _epoch(t['exit_date']))
+
+        # Window: the look-back the simulator used to detect this entry's levels
+        # (period_days ending at the detection candle) … through the exit + pad.
+        det_i = date_index.get(t['detection_date'])
+        rolling = _rolling_window(all_candles, det_i, period_days) if det_i is not None else []
+        lo = (det_i - len(rolling) + 1) if rolling else 0
+        try:
+            xi = times.index(exit_t) if exit_t is not None else len(candles) - 1
+        except ValueError:
+            xi = len(candles) - 1
+        hi = min(len(candles), xi + pad + 1)
+        window = candles[lo:hi]
+
+        # S&R lines as of the entry decision (classified by the detection close).
+        det_close = all_candles[det_i]['close'] if det_i is not None else None
+        sr_lines = _sr_lines_for_window(rolling, swing_config, det_close)
+
+        level_lines = []
+        lp = t.get('level_price')
+        if lp is not None:
+            level_lines.append({'price': round(lp, 2), 'type': 'RESISTANCE' if is_bull else 'SUPPORT'})
+
+        markers = []
+        if entry_t is not None:
+            markers.append({
+                'time': entry_t,
+                'position': 'belowBar' if is_bull else 'aboveBar',
+                'color': '#2563eb',
+                'shape': 'arrowUp' if is_bull else 'arrowDown',
+                'text': f"Entry ₹{t['entry_price']}",
+            })
+        fills = t.get('fills') or []
+        for f in fills:
+            ft = _snap(times, _epoch(f['date']))
+            if ft is None:
+                continue
+            if f['reason'] in _TP_REASONS:
+                color = '#16a34a'
+            elif f['reason'] in _SL_REASONS:
+                color = '#dc2626'
+            else:
+                color = '#16a34a' if t['pnl'] >= 0 else '#dc2626'
+            label = _REASON_SHORT.get(f['reason'], f['reason'])
+            markers.append({
+                'time': ft,
+                'position': 'aboveBar' if is_bull else 'belowBar',
+                'color': color,
+                'shape': 'circle',
+                'text': f"{label} {int(f['qty'])}@₹{f['price']}",
+            })
+        if not fills and exit_t is not None:
+            win = t['pnl'] >= 0
+            sign = '+' if t['pnl_pct'] >= 0 else ''
+            markers.append({
+                'time': exit_t,
+                'position': 'aboveBar' if is_bull else 'belowBar',
+                'color': '#16a34a' if win else '#dc2626',
+                'shape': 'circle',
+                'text': f"Exit ₹{t['exit_price']} ({sign}{t['pnl_pct']}%)",
+            })
+        markers.sort(key=lambda m: m['time'])
+
+        t['chart'] = {
+            'candles': window,
+            'level_lines': level_lines,
+            'sr_lines': sr_lines,
+            'ref_price': None,  # entry is already marked by the arrow; skip the close line here
+            'markers': markers,
+            'symbol': symbol,
+            'exchange': exchange,
+            'candle_size': candle_size,
+            'options_mode': options_mode,
+            'pnl': t['pnl'],
+            'pnl_pct': t['pnl_pct'],
+        }
+
+
 # ─── Endpoint ─────────────────────────────────────────────────────────────────
 
 @customer_backtest_bp.post('/api/customer/backtest')
@@ -673,9 +964,22 @@ def run_backtest():
         total_pnl   = round(sum(t['pnl'] for t in trades), 2)
         accuracy    = round(len(winning) / len(trades) * 100, 1) if trades else 0
         avg_pnl_pct = round(sum(t['pnl_pct'] for t in trades) / len(trades), 2) if trades else 0
+        avg_entry_price = round(sum(t['entry_price'] for t in trades) / len(trades), 2) if trades else 0
 
         period_from = report_candles[0]['date']
         period_to   = report_candles[-1]['date']
+
+        chart = _build_chart(
+            report_candles, trades,
+            symbol=candle_symbol, exchange=candle_exchange,
+            candle_size=candle_size, options_mode=options_mode,
+        )
+        _attach_trade_charts(
+            all_candles, trades,
+            symbol=candle_symbol, exchange=candle_exchange,
+            candle_size=candle_size, options_mode=options_mode,
+            swing_config=swing_config_dict,
+        )
 
         return jsonify({
             'strategy':           strategy_dict,
@@ -684,6 +988,7 @@ def run_backtest():
             'pattern_detections': detections,
             'trades':             trades,
             'skipped_dates':      skipped_dates,
+            'chart':              chart,
             'summary': {
                 'total_patterns_identified': len(detections),
                 'total_trades_executed':     len(trades),
@@ -694,6 +999,7 @@ def run_backtest():
                 'accuracy_pct':              accuracy,
                 'total_pnl':                 total_pnl,
                 'avg_pnl_pct':               avg_pnl_pct,
+                'avg_entry_price':           avg_entry_price,
             },
         }), 200
 

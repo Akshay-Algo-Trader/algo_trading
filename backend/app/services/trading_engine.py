@@ -27,7 +27,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.extensions import db
@@ -58,6 +58,7 @@ from app.routes.customer.backtest import (
     _j,
 )
 from app.services.encryption import decrypt
+from app.services.kite_service import IST
 from app.services.option_resolver import meta_for as _option_meta_for, resolve_option_contract
 from app.services.swing_breakout import (
     classify_by_ltp,
@@ -74,6 +75,7 @@ logger = logging.getLogger(__name__)
 _POLL_SECONDS = 3            # how often the engine checks LTP / runs eval
 _CANDLE_CACHE_TTL_SEC = 300  # 5 min — swing candles refresh
 _BROKERAGE_FLAT = 20.0
+_SQUAREOFF_H, _SQUAREOFF_M = 15, 20  # intraday square-off ~15:20 IST (before 15:30 NSE close)
 _LOG_RING_PER_SESSION = 300  # cap on persisted log lines per session (per-tick monitoring snapshots)
 
 
@@ -122,6 +124,7 @@ class TradingEngine:
         self._breakout_signal: Optional[dict] = None
         self._prev_ltp: Optional[float] = None
         self._entry_price: Optional[float] = None
+        self._entry_time: Optional[datetime] = None  # IST wall-clock of entry (time-exit anchor)
         self._plan: Optional[dict] = None
         self._hwm: float = 0
         self._lwm: float = 0
@@ -340,6 +343,7 @@ class TradingEngine:
             'direction':    self._plan['direction'],
             'sign':         self._plan['sign'],
             'entry_price':  self._plan['entry_price'],
+            'entry_time':   self._entry_time.isoformat() if self._entry_time else None,
             'det_candle_low':  self._plan['det_candle_low'],
             'det_candle_high': self._plan['det_candle_high'],
             'sl':           sl,
@@ -394,6 +398,8 @@ class TradingEngine:
             'targets':      targets,
             'partial_book': partial_book,
         }
+        et = st.get('entry_time')
+        self._entry_time = datetime.fromisoformat(et) if et else None
         self._hwm = float(st.get('hwm') or st['entry_price'])
         self._lwm = float(st.get('lwm') or st['entry_price'])
         self._total_qty = int(st.get('total') or 0)
@@ -620,6 +626,7 @@ class TradingEngine:
         self._partial_booked = False
         self._break_even_triggered = False
         self._entry_price = entry_price
+        self._entry_time = datetime.now(IST)
         self._phase = 'in_position'
 
         # Compose informative log
@@ -679,9 +686,39 @@ class TradingEngine:
     #  In-position → exits
     # ──────────────────────────────────────────────────────────────────────
 
+    def _time_exit_due(self):
+        """Whether an intraday square-off or swing max-hold cutoff has passed.
+
+        Returns (due, label). Uses IST wall-clock (not candle iteration). trade_type
+        and exit_after_days come from the strategy (reloaded at start), so they
+        survive a process restart; the entry anchor is persisted in plan_state."""
+        if not self._entry_time:
+            return False, ''
+        trade_type = self._strategy_dict.get('trade_type') or 'swing'
+        now = datetime.now(IST)
+        if trade_type == 'intraday':
+            if now.date() > self._entry_time.date():
+                return True, 'Intraday square-off (next session)'
+            cutoff = now.replace(hour=_SQUAREOFF_H, minute=_SQUAREOFF_M, second=0, microsecond=0)
+            return (now >= cutoff), 'Intraday square-off (EOD)'
+        n = self._strategy_dict.get('exit_after_days')
+        if n and int(n) > 0:
+            due = now.date() > self._entry_time.date() + timedelta(days=int(n))
+            return due, f'Max hold {int(n)}d reached'
+        return False, ''
+
     def _eval_in_position(self, ltp: float):
         plan = self._plan
         if not plan or self._remaining_qty <= 0:
+            return
+
+        # Time-based exit (intraday square-off / swing max-hold) — takes priority.
+        due, label = self._time_exit_due()
+        if due:
+            self._log(f"{label} @ ₹{ltp:.2f}", 'warn')
+            self._place_exit_order(self._remaining_qty, ltp, reason='time_exit')
+            self._remaining_qty = 0
+            self._complete_session(ltp)
             return
 
         direction = plan['direction']

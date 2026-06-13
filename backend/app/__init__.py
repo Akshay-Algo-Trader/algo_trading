@@ -23,7 +23,7 @@ def create_app(config_name='development'):
     
     # Import models for Flask-Migrate to discover them
     from app.models import (
-        User, KiteConfig, CandlePattern, Strategy, UserStrategy, TradingSession,
+        User, KiteConfig, Strategy, UserStrategy, TradingSession,
         LiveOrder, PaperOrder, PaperPosition, VirtualAccount, AuditLog, Instrument
     )
 

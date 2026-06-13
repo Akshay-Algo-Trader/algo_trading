@@ -406,6 +406,8 @@ def create_strategy():
         take_profit_pct=float(data['take_profit_pct']),
         stop_loss_rules=data.get('stop_loss_rules'),
         target_rules=data.get('target_rules'),
+        trade_type=data.get('trade_type', 'swing'),
+        exit_after_days=data.get('exit_after_days'),
         swing_zone_config_id=data.get('swing_zone_config_id'),
         option_config=data.get('option_config'),
         created_by=int(get_jwt_identity())
@@ -423,7 +425,8 @@ def update_strategy(strategy_id):
 
     scalar_fields = ['name', 'description', 'instrument', 'quantity',
                      'stop_loss_pct', 'take_profit_pct', 'stop_loss_rules',
-                     'target_rules', 'swing_zone_config_id', 'option_config',
+                     'target_rules', 'trade_type', 'exit_after_days',
+                     'swing_zone_config_id', 'option_config',
                      'is_active']
     for field in scalar_fields:
         if field in data:

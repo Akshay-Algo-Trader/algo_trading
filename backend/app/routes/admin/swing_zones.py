@@ -7,11 +7,11 @@ from app.models import SwingZoneConfig, SwingZoneScanResult, KiteConfig
 from app.routes.decorators import admin_required
 from app.services.swing_zone_detector import (
     detect_sr_levels,
+    _aggregate_to_4h,
     _KITE_INTERVAL,
     _BUFFER_DAYS,
     _MAX_FETCH_DAYS,
 )
-from app.services.fvg_zone_detector import _aggregate_to_4h
 from app.services.encryption import decrypt
 
 logger = logging.getLogger(__name__)
@@ -21,7 +21,6 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 
 _VALID_SIZES = ('1min', '5min', '15min', '30min', '1hour', '4hour')
 _VALID_PERIODS = (1, 7, 10, 30, 60, 90)
-_VALID_STRONG_PCTS = (0.1, 0.5, 1.0, 1.5, 2.0)
 
 
 @admin_swing_zones_bp.get('/api/admin/swing-zones')
@@ -42,8 +41,8 @@ def create_swing_zone():
         return jsonify({'error': 'A config with this name already exists'}), 409
 
     strong_level_pct = float(data.get('strong_level_pct', 0.5))
-    if strong_level_pct not in _VALID_STRONG_PCTS:
-        return jsonify({'error': f'strong_level_pct must be one of {_VALID_STRONG_PCTS}'}), 400
+    if not (0.01 <= strong_level_pct <= 1):
+        return jsonify({'error': 'strong_level_pct must be between 0.01 and 1'}), 400
 
     config = SwingZoneConfig(
         name=data['name'],
@@ -82,8 +81,8 @@ def update_swing_zone(config_id):
 
     if 'strong_level_pct' in data:
         strong_level_pct = float(data['strong_level_pct'])
-        if strong_level_pct not in _VALID_STRONG_PCTS:
-            return jsonify({'error': f'strong_level_pct must be one of {_VALID_STRONG_PCTS}'}), 400
+        if not (0.01 <= strong_level_pct <= 1):
+            return jsonify({'error': 'strong_level_pct must be between 0.01 and 1'}), 400
         config.strong_level_pct = strong_level_pct
 
     db.session.commit()
