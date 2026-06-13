@@ -74,6 +74,9 @@ class _SessionManager:
         engine = self._sessions.get(session_id)
         return engine.get_status() if engine else None
 
+    def get_engine(self, session_id: int):
+        return self._sessions.get(session_id)
+
     def is_active(self, session_id: int) -> bool:
         engine = self._sessions.get(session_id)
         if engine is None:

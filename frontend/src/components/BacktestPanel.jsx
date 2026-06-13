@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, Fragment } from 'react'
+import BacktestChart from './BacktestChart'
 
 export const BACKTEST_DURATIONS = [
   { label: '1 Month',  days: 30  },
@@ -18,6 +19,8 @@ const EXIT_LABELS = {
   partial_then_sl:       { text: 'Partial → SL',    cls: 'bg-orange-100 text-orange-700' },
   first_candle_violated: { text: 'Structure Stop',  cls: 'bg-red-100 text-red-700'    },
   end_of_period:         { text: 'Period End',      cls: 'bg-gray-100 text-gray-600'  },
+  eod_square_off:        { text: 'EOD Square-off',  cls: 'bg-gray-100 text-gray-600'  },
+  time_exit:             { text: 'Time Exit',       cls: 'bg-amber-100 text-amber-700' },
 }
 
 const PAGE_SIZE = 10
@@ -93,11 +96,18 @@ export default function BacktestPanel({ result, error, loading, emptyHint = 'Sel
   const [activeTab, setActiveTab] = useState('trades')
   const [tradePage, setTradePage] = useState(1)
   const [detPage,   setDetPage]   = useState(1)
+  const [expandedTrade, setExpandedTrade] = useState(null)
 
   function switchTab(tab) {
     setActiveTab(tab)
     setTradePage(1)
     setDetPage(1)
+    setExpandedTrade(null)
+  }
+
+  function gotoTradePage(p) {
+    setExpandedTrade(null)
+    setTradePage(p)
   }
 
   if (error) {
@@ -136,6 +146,7 @@ export default function BacktestPanel({ result, error, loading, emptyHint = 'Sel
   const trades     = result.trades             || []
   const detections = result.pattern_detections || []
   const skipped    = result.skipped_dates      || []
+  const chart      = result.chart              || null
   const tradePages = Math.ceil(trades.length / PAGE_SIZE)
   const detPages   = Math.ceil(detections.length / PAGE_SIZE)
   const tradeSlice = trades.slice((tradePage - 1) * PAGE_SIZE, tradePage * PAGE_SIZE)
@@ -159,10 +170,11 @@ export default function BacktestPanel({ result, error, loading, emptyHint = 'Sel
       </div>
 
       {/* Summary stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <StatCard label="Patterns Identified" value={s.total_patterns_identified} sub={`across ${result.candles_analyzed} days`} color="purple" />
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+        <StatCard label="Breakouts Detected" value={s.total_patterns_identified} sub={`across ${result.candles_analyzed} days`} color="purple" />
         <StatCard label="Trades Executed"     value={s.total_trades_executed}     sub={`${s.winning_trades}W / ${s.losing_trades}L`} color="blue" />
         <StatCard label="Strategy Accuracy"   value={`${s.accuracy_pct}%`}        sub={`TP: ${s.take_profit_triggered}  ·  SL: ${s.stop_loss_triggered}`} color={s.accuracy_pct >= 50 ? 'green' : 'red'} />
+        <StatCard label="Avg Entry Price"     value={`₹${s.avg_entry_price.toLocaleString()}`} sub={`per trade`} color="gray" />
         <StatCard label="Total P&L"           value={`₹${s.total_pnl >= 0 ? '+' : ''}${s.total_pnl.toLocaleString()}`} sub={`Avg ${s.avg_pnl_pct >= 0 ? '+' : ''}${s.avg_pnl_pct}% per trade`} color={s.total_pnl >= 0 ? 'green' : 'red'} />
       </div>
 
@@ -185,8 +197,9 @@ export default function BacktestPanel({ result, error, loading, emptyHint = 'Sel
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
         <div className="flex border-b border-gray-200">
           {[
+            { id: 'chart',      label: 'Chart' },
             { id: 'trades',     label: `Trades (${trades.length})` },
-            { id: 'detections', label: `Pattern Detections (${detections.length})` },
+            { id: 'detections', label: `Breakout Signals (${detections.length})` },
           ].map(tab => (
             <button key={tab.id} onClick={() => switchTab(tab.id)}
               className={`px-5 py-3 text-sm font-medium transition-colors border-b-2 ${activeTab === tab.id ? 'border-blue-600 text-blue-700 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}>
@@ -195,17 +208,25 @@ export default function BacktestPanel({ result, error, loading, emptyHint = 'Sel
           ))}
         </div>
 
+        {activeTab === 'chart' && (
+          chart && chart.candles?.length ? (
+            <BacktestChart chart={chart} />
+          ) : (
+            <div className="p-8 text-center text-gray-400 text-sm">No chart data available for this period.</div>
+          )
+        )}
+
         {activeTab === 'trades' && (
           trades.length === 0 ? (
-            <div className="p-8 text-center text-gray-400 text-sm">No trades executed — pattern conditions were never met in this period.</div>
+            <div className="p-8 text-center text-gray-400 text-sm">No trades executed — breakout conditions were never met in this period.</div>
           ) : (
             <>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      {['#', 'Pattern Date', 'Entry Date', 'Entry Price', 'Exit Date', 'Exit Price', 'Exit Reason', 'P&L %', 'P&L (₹)'].map(h => (
-                        <th key={h} className="text-left text-xs font-semibold text-gray-500 px-4 py-3">{h}</th>
+                      {['', '#', 'Breakout Date', 'Entry Date', 'Entry Price', 'Exit Date', 'Exit Price', 'Exit Reason', 'P&L %', 'P&L (₹)'].map((h, hi) => (
+                        <th key={hi} className="text-left text-xs font-semibold text-gray-500 px-4 py-3">{h}</th>
                       ))}
                     </tr>
                   </thead>
@@ -213,40 +234,63 @@ export default function BacktestPanel({ result, error, loading, emptyHint = 'Sel
                     {tradeSlice.map((t, i) => {
                       const globalIdx = (tradePage - 1) * PAGE_SIZE + i
                       const ex = EXIT_LABELS[t.exit_reason] || { text: t.exit_reason, cls: 'bg-gray-100 text-gray-600' }
+                      const hasChart = t.chart && t.chart.candles?.length
+                      const isOpen = expandedTrade === globalIdx
                       return (
-                        <tr key={globalIdx} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 py-3 text-gray-400 font-mono text-xs">{globalIdx + 1}</td>
-                          <td className="px-4 py-3 text-gray-600 font-mono text-xs">{t.detection_date}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-800">{t.entry_date}</td>
-                          <td className="px-4 py-3 font-mono text-xs font-semibold">₹{t.entry_price.toLocaleString()}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-gray-800">{t.exit_date}</td>
-                          <td className="px-4 py-3 font-mono text-xs font-semibold">₹{t.exit_price.toLocaleString()}</td>
-                          <td className="px-4 py-3"><span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ex.cls}`}>{ex.text}</span></td>
-                          <td className="px-4 py-3"><PnlBadge pct={t.pnl_pct} /></td>
-                          <td className={`px-4 py-3 font-semibold text-xs font-mono ${t.pnl >= 0 ? 'text-green-700' : 'text-red-600'}`}>
-                            {t.pnl >= 0 ? '+' : ''}₹{t.pnl.toLocaleString()}
-                          </td>
-                        </tr>
+                        <Fragment key={globalIdx}>
+                          <tr
+                            className={`transition-colors ${hasChart ? 'cursor-pointer hover:bg-blue-50/50' : 'hover:bg-gray-50'} ${isOpen ? 'bg-blue-50/60' : ''}`}
+                            onClick={() => hasChart && setExpandedTrade(isOpen ? null : globalIdx)}
+                          >
+                            <td className="px-4 py-3">
+                              {hasChart && (
+                                <svg className={`w-4 h-4 text-gray-400 transition-transform ${isOpen ? 'rotate-90 text-blue-600' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                                </svg>
+                              )}
+                            </td>
+                            <td className="px-4 py-3 text-gray-400 font-mono text-xs">{globalIdx + 1}</td>
+                            <td className="px-4 py-3 text-gray-600 font-mono text-xs">{t.detection_date}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-gray-800">{t.entry_date}</td>
+                            <td className="px-4 py-3 font-mono text-xs font-semibold">₹{t.entry_price.toLocaleString()}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-gray-800">{t.exit_date}</td>
+                            <td className="px-4 py-3 font-mono text-xs font-semibold">₹{t.exit_price.toLocaleString()}</td>
+                            <td className="px-4 py-3"><span className={`text-xs font-medium px-2 py-0.5 rounded-full ${ex.cls}`}>{ex.text}</span></td>
+                            <td className="px-4 py-3"><PnlBadge pct={t.pnl_pct} /></td>
+                            <td className={`px-4 py-3 font-semibold text-xs font-mono ${t.pnl >= 0 ? 'text-green-700' : 'text-red-600'}`}>
+                              {t.pnl >= 0 ? '+' : ''}₹{t.pnl.toLocaleString()}
+                            </td>
+                          </tr>
+                          {isOpen && hasChart && (
+                            <tr>
+                              <td colSpan={10} className="bg-gray-50 px-4 py-4">
+                                <div className="bg-white border border-gray-200 rounded-lg">
+                                  <BacktestChart chart={t.chart} />
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
                       )
                     })}
                   </tbody>
                 </table>
               </div>
-              <Pagination page={tradePage} totalPages={tradePages} total={trades.length} pageSize={PAGE_SIZE} onPage={setTradePage} />
+              <Pagination page={tradePage} totalPages={tradePages} total={trades.length} pageSize={PAGE_SIZE} onPage={gotoTradePage} />
             </>
           )
         )}
 
         {activeTab === 'detections' && (
           detections.length === 0 ? (
-            <div className="p-8 text-center text-gray-400 text-sm">Pattern was not detected in this period.</div>
+            <div className="p-8 text-center text-gray-400 text-sm">No breakout signals were detected in this period.</div>
           ) : (
             <>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead className="bg-gray-50 border-b border-gray-200">
                     <tr>
-                      {['#', 'Date', 'Pattern', 'Open', 'High', 'Low', 'Close', 'Volume'].map(h => (
+                      {['#', 'Date', 'Breakout', 'Open', 'High', 'Low', 'Close', 'Volume'].map(h => (
                         <th key={h} className="text-left text-xs font-semibold text-gray-500 px-4 py-3">{h}</th>
                       ))}
                     </tr>

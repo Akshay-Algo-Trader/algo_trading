@@ -441,6 +441,7 @@ export default function StrategyEdit() {
     name: '', description: '', instrument: '', exchange: 'NSE',
     order_type: 'MARKET', quantity: '', stop_loss_pct: '', take_profit_pct: '',
     swing_zone_config_id: '',
+    trade_type: 'swing', exit_after_days: '',
     is_active: true,
     option_enabled: false,
     option_underlying: 'NIFTY',
@@ -486,6 +487,8 @@ export default function StrategyEdit() {
         stop_loss_pct:   String(s.stop_loss_pct ?? ''),
         take_profit_pct: String(s.take_profit_pct ?? ''),
         swing_zone_config_id: s.swing_zone_config_id ? String(s.swing_zone_config_id) : '',
+        trade_type:        s.trade_type ?? 'swing',
+        exit_after_days:   s.exit_after_days != null ? String(s.exit_after_days) : '',
         is_active:         s.is_active ?? true,
         option_enabled:           !!s.option_config?.enabled,
         option_underlying:        s.option_config?.underlying        ?? 'NIFTY',
@@ -567,6 +570,9 @@ export default function StrategyEdit() {
         take_profit_pct: parseFloat(form.take_profit_pct),
         stop_loss_rules:   rowsToRulesObj(slRulesRows),
         target_rules:      rowsToRulesObj(targetRulesRows),
+        trade_type:        form.trade_type,
+        exit_after_days:   form.trade_type === 'swing' && form.exit_after_days !== ''
+                             ? parseInt(form.exit_after_days) : null,
         swing_zone_config_id: form.swing_zone_config_id ? parseInt(form.swing_zone_config_id) : null,
         option_config: form.option_enabled
           ? { enabled: true, underlying: form.option_underlying,
@@ -731,6 +737,19 @@ export default function StrategyEdit() {
             <FormField label="Quantity (lots)">
               <Input type="number" min={1} value={form.quantity} onChange={set('quantity')} required />
             </FormField>
+
+            <FormField label="Trade Type" hint="Intraday squares off on the same day it enters. Swing can hold the position across multiple days.">
+              <Select value={form.trade_type} onChange={set('trade_type')}>
+                <option value="swing">Swing — hold across days</option>
+                <option value="intraday">Intraday — square off same day</option>
+              </Select>
+            </FormField>
+
+            {form.trade_type === 'swing' && (
+              <FormField label="Exit After (days)" hint="Max holding days for a swing trade — force-exit at that point if neither Stop Loss nor Take Profit has hit. Leave blank for no cap.">
+                <Input type="number" min={1} value={form.exit_after_days} onChange={set('exit_after_days')} placeholder="No cap" />
+              </FormField>
+            )}
 
             <FormField label="Description">
               <Input value={form.description} onChange={set('description')} placeholder="Optional" />

@@ -28,21 +28,6 @@ const NAV_ITEMS = [
     icon: <Icon d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />,
   },
   {
-    path: '/admin/candle-patterns',
-    label: 'Candle Patterns',
-    icon: <Icon d="M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z" />,
-  },
-  {
-    path: '/admin/zones',
-    label: 'Zones',
-    icon: <Icon d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />,
-  },
-  {
-    path: '/admin/fvg-zones',
-    label: 'FVG Zones',
-    icon: <Icon d="M3 10h11M9 21V3M3 14h11m7-4l-3 3 3 3" />,
-  },
-  {
     path: '/admin/swing-zones',
     label: 'Swing Levels',
     icon: <Icon d="M3 17l4-8 4 4 4-6 4 10" />,
@@ -84,9 +69,6 @@ const BREADCRUMB_MAP = {
   dashboard: 'Dashboard',
   customers: 'Customers',
   strategies: 'Strategies',
-  'candle-patterns': 'Candle Patterns',
-  zones: 'Zones',
-  'fvg-zones': 'FVG Zones',
   'swing-zones': 'Swing Levels',
   'swing-scan': 'Scan Swing Levels',
   'kite-config': 'Kite Config',

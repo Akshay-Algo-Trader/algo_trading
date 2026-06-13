@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import axiosInstance from '../../api/axiosInstance'
 import { useTradingStore } from '../../store/tradingStore'
 import { useStrategyExecutor } from '../../hooks/useStrategyExecutor'
+import ExecutionChart from '../../components/customer/ExecutionChart'
 import {
   ComposedChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell,
@@ -193,7 +194,7 @@ function fmt(n) {
 }
 
 // ── Execution Engine panel ────────────────────────────────────────────────────
-function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected, planState, onStop }) {
+function ExecutorPanel({ session, strategy, phase, ltp, entryPrice, logs, patternDetected, planState, onStop }) {
   const dir = planState?.direction === 'bearish' ? 'bearish' : 'bullish'
   const pnlPct = entryPrice != null && ltp != null
     ? (dir === 'bearish'
@@ -324,6 +325,15 @@ function ExecutorPanel({ strategy, phase, ltp, entryPrice, logs, patternDetected
           </p>
         </div>
       )}
+
+      {/* Live execution chart — the engine's own view: levels, breakout, plan */}
+      <ExecutionChart
+        session={session}
+        phase={phase}
+        ltp={ltp}
+        entryPrice={entryPrice}
+        planState={planState}
+      />
 
       {/* P&L bar */}
       {pnlPct != null && (
@@ -694,6 +704,7 @@ export default function Strategies() {
       {/* Execution engine panel — shown when a session is active */}
       {activeSession && activeStrategy && (
         <ExecutorPanel
+          session={activeSession}
           strategy={activeStrategy}
           phase={phase}
           ltp={ltp}

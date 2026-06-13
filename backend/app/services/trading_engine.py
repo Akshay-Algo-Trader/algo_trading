@@ -27,7 +27,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.extensions import db
@@ -58,6 +58,7 @@ from app.routes.customer.backtest import (
     _j,
 )
 from app.services.encryption import decrypt
+from app.services.kite_service import IST
 from app.services.option_resolver import meta_for as _option_meta_for, resolve_option_contract
 from app.services.swing_breakout import (
     classify_by_ltp,
@@ -74,6 +75,7 @@ logger = logging.getLogger(__name__)
 _POLL_SECONDS = 3            # how often the engine checks LTP / runs eval
 _CANDLE_CACHE_TTL_SEC = 300  # 5 min — swing candles refresh
 _BROKERAGE_FLAT = 20.0
+_SQUAREOFF_H, _SQUAREOFF_M = 15, 20  # intraday square-off ~15:20 IST (before 15:30 NSE close)
 _LOG_RING_PER_SESSION = 300  # cap on persisted log lines per session (per-tick monitoring snapshots)
 
 
@@ -119,8 +121,10 @@ class TradingEngine:
         # In-memory mutable state — also serialised into TradingSession.plan_state
         self._phase: str = 'monitoring'
         self._pattern_detected: bool = False
+        self._breakout_signal: Optional[dict] = None
         self._prev_ltp: Optional[float] = None
         self._entry_price: Optional[float] = None
+        self._entry_time: Optional[datetime] = None  # IST wall-clock of entry (time-exit anchor)
         self._plan: Optional[dict] = None
         self._hwm: float = 0
         self._lwm: float = 0
@@ -205,6 +209,24 @@ class TradingEngine:
     def is_running(self) -> bool:
         return self._running
 
+    def get_chart_data(self) -> dict:
+        """Snapshot of what the engine is actually evaluating — the cached swing
+        candles, the S&R levels detected on them (closed candles only, exactly
+        like _eval_monitoring), and the latest LTP. Used by the customer
+        execution chart so the FE renders the engine's own view, not a
+        re-derived one."""
+        candles = list(self._candles_cache)
+        closed = candles[:-1] if candles else []
+        pivot_bars = int(self._swing_config.get('pivot_bars') or 5)
+        levels = detect_sr_levels(closed, pivot_bars) if len(closed) >= pivot_bars * 2 + 1 else []
+        return {
+            'candles':           candles,
+            'levels':            levels,
+            'ltp':               self._prev_ltp,
+            'option_mode':       bool(self._option_config),
+            'resolved_contract': self._resolved_contract,
+        }
+
     # ──────────────────────────────────────────────────────────────────────
     #  Hydration — strategy + ticker subscription + resume
     # ──────────────────────────────────────────────────────────────────────
@@ -238,6 +260,8 @@ class TradingEngine:
 
         # Restore previously-resolved contract (resume case)
         plan_state_preview = session.plan_state or {}
+        if isinstance(plan_state_preview, dict):
+            self._breakout_signal = plan_state_preview.get('breakout')
         prev_contract = (plan_state_preview or {}).get('resolved_contract') if isinstance(plan_state_preview, dict) else None
         if prev_contract:
             self._resolved_contract = prev_contract
@@ -303,17 +327,23 @@ class TradingEngine:
 
     def _serialize_plan_state(self) -> Optional[dict]:
         if not self._plan:
-            # Still surface the resolved contract during monitoring → in_position
-            # transition so the customer UI can render it before the plan persists.
-            if self._resolved_contract:
-                return {'resolved_contract': self._resolved_contract}
+            # Still surface the resolved contract / breakout during monitoring →
+            # in_position transition so the customer UI can render them before
+            # the plan persists.
+            if self._resolved_contract or self._breakout_signal:
+                return {
+                    'resolved_contract': self._resolved_contract,
+                    'breakout': self._breakout_signal,
+                }
             return None
         sl = self._current_sl_price()
         return {
             'resolved_contract': self._resolved_contract,
+            'breakout':     self._breakout_signal,
             'direction':    self._plan['direction'],
             'sign':         self._plan['sign'],
             'entry_price':  self._plan['entry_price'],
+            'entry_time':   self._entry_time.isoformat() if self._entry_time else None,
             'det_candle_low':  self._plan['det_candle_low'],
             'det_candle_high': self._plan['det_candle_high'],
             'sl':           sl,
@@ -368,6 +398,8 @@ class TradingEngine:
             'targets':      targets,
             'partial_book': partial_book,
         }
+        et = st.get('entry_time')
+        self._entry_time = datetime.fromisoformat(et) if et else None
         self._hwm = float(st.get('hwm') or st['entry_price'])
         self._lwm = float(st.get('lwm') or st['entry_price'])
         self._total_qty = int(st.get('total') or 0)
@@ -537,14 +569,29 @@ class TradingEngine:
         self._direction = signal['direction']
         last_level = signal['last_level']
         strong_level_type = 'RESISTANCE' if signal['direction'] == 'bullish' else 'SUPPORT'
+        if signal['is_extreme']:
+            extreme_label = 'MAX RESISTANCE' if signal['direction'] == 'bullish' else 'MIN SUPPORT'
+            strong_note = f"{extreme_label} (extreme level treated as STRONG)"
+        else:
+            strong_note = f"strong cluster of {signal['cluster_size']}"
         self._log(
             f"Breakout signal: {signal['direction']} thru strong {strong_level_type} "
-            f"₹{signal['level_price']} (nearest level ₹{signal['nearest_price']} on strong line, "
-            f"cluster of {signal['cluster_size']}; last level: {last_level['type']} @ ₹{last_level['price']}) "
-            f"@ LTP ₹{ltp}",
+            f"₹{signal['level_price']} — {strong_note}; nearest level ₹{signal['nearest_price']} on strong line; "
+            f"last level: {last_level['type']} @ ₹{last_level['price']} @ LTP ₹{ltp}",
             'success',
         )
         self._pattern_detected = True
+        self._breakout_signal = {
+            'direction':     signal['direction'],
+            'level_price':   signal['level_price'],
+            'nearest_price': signal['nearest_price'],
+            'cluster_size':  signal['cluster_size'],
+            'last_level':    {'price': last_level['price'], 'type': last_level['type'],
+                              'date': str(last_level['date'])},
+            'det_candle_date': det_candle['date'],
+            'ltp':           ltp,
+            'at':            datetime.now(timezone.utc).isoformat(),
+        }
 
         # Options leg: resolve the actual CE/PE contract, swap the engine over to
         # it, and use the option premium (not the index LTP) as the entry price.
@@ -579,6 +626,7 @@ class TradingEngine:
         self._partial_booked = False
         self._break_even_triggered = False
         self._entry_price = entry_price
+        self._entry_time = datetime.now(IST)
         self._phase = 'in_position'
 
         # Compose informative log
@@ -608,7 +656,7 @@ class TradingEngine:
         strong = find_strong_levels(classified, self._swing_config.get('strong_level_pct'))
         nearest = find_nearest_levels(classified, ltp)
 
-        def describe(nearest_level, clusters):
+        def describe(nearest_level, clusters, extreme_label):
             if not nearest_level:
                 return None
             cluster = next(
@@ -618,15 +666,16 @@ class TradingEngine:
             )
             text = f"₹{nearest_level['price']:,.2f}"
             if cluster:
-                text += f" (on strong line ₹{cluster['price']:,.2f})"
+                kind = f"STRONG {extreme_label}" if cluster.get('extreme') else "strong line"
+                text += f" (on {kind} ₹{cluster['price']:,.2f})"
             return text
 
         parts = [
             f"Monitoring {self._symbol} @ ₹{ltp:,.2f}",
             f"last level {last['type']} @ ₹{last['price']:,.2f} (bias {bias})",
         ]
-        res = describe(nearest['nearest_resistance'], strong['strong_resistance'])
-        sup = describe(nearest['nearest_support'], strong['strong_support'])
+        res = describe(nearest['nearest_resistance'], strong['strong_resistance'], 'MAX RESISTANCE')
+        sup = describe(nearest['nearest_support'], strong['strong_support'], 'MIN SUPPORT')
         if res:
             parts.append(f"nearest resistance {res}")
         if sup:
@@ -637,9 +686,39 @@ class TradingEngine:
     #  In-position → exits
     # ──────────────────────────────────────────────────────────────────────
 
+    def _time_exit_due(self):
+        """Whether an intraday square-off or swing max-hold cutoff has passed.
+
+        Returns (due, label). Uses IST wall-clock (not candle iteration). trade_type
+        and exit_after_days come from the strategy (reloaded at start), so they
+        survive a process restart; the entry anchor is persisted in plan_state."""
+        if not self._entry_time:
+            return False, ''
+        trade_type = self._strategy_dict.get('trade_type') or 'swing'
+        now = datetime.now(IST)
+        if trade_type == 'intraday':
+            if now.date() > self._entry_time.date():
+                return True, 'Intraday square-off (next session)'
+            cutoff = now.replace(hour=_SQUAREOFF_H, minute=_SQUAREOFF_M, second=0, microsecond=0)
+            return (now >= cutoff), 'Intraday square-off (EOD)'
+        n = self._strategy_dict.get('exit_after_days')
+        if n and int(n) > 0:
+            due = now.date() > self._entry_time.date() + timedelta(days=int(n))
+            return due, f'Max hold {int(n)}d reached'
+        return False, ''
+
     def _eval_in_position(self, ltp: float):
         plan = self._plan
         if not plan or self._remaining_qty <= 0:
+            return
+
+        # Time-based exit (intraday square-off / swing max-hold) — takes priority.
+        due, label = self._time_exit_due()
+        if due:
+            self._log(f"{label} @ ₹{ltp:.2f}", 'warn')
+            self._place_exit_order(self._remaining_qty, ltp, reason='time_exit')
+            self._remaining_qty = 0
+            self._complete_session(ltp)
             return
 
         direction = plan['direction']

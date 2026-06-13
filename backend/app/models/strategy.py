@@ -32,6 +32,8 @@ class Strategy(db.Model):
     take_profit_pct = db.Column(db.Float, nullable=False)  # Take profit percentage
     stop_loss_rules = db.Column(JSON, nullable=True)
     target_rules = db.Column(JSON, nullable=True)
+    trade_type = db.Column(db.String(20), nullable=False, default='swing', server_default='swing')  # 'intraday' | 'swing'
+    exit_after_days = db.Column(db.Integer, nullable=True)  # swing-only max hold; NULL = no cap
     swing_zone_config_id = db.Column(db.Integer, db.ForeignKey('swing_zone_configs.id'), nullable=True, index=True)
     option_config = db.Column(JSON, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
@@ -57,6 +59,8 @@ class Strategy(db.Model):
             'take_profit_pct': self.take_profit_pct,
             'stop_loss_rules': self.stop_loss_rules,
             'target_rules': self.target_rules,
+            'trade_type': self.trade_type,
+            'exit_after_days': self.exit_after_days,
             'swing_zone_config_id': self.swing_zone_config_id,
             'swing_zone_config': self.swing_zone_config.to_dict() if self.swing_zone_config else None,
             'option_config': self.option_config,

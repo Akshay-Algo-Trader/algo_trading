@@ -5,7 +5,7 @@ import {
   Card, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
 import InstrumentSearch from '../../components/admin/InstrumentSearch'
-import SRChart, { NearbyLevels, StrongLevels, findNearestLevels, findStrongLevels, strongClusterOthers, classifyByLtp, STRONG_LEVEL_PCT_OPTIONS } from '../../components/admin/SwingZoneChart'
+import SRChart, { NearbyLevels, StrongLevels, findNearestLevels, findStrongLevels, strongClusterOthers, classifyByLtp } from '../../components/admin/SwingZoneChart'
 
 const PERIOD_OPTIONS = [1, 7, 10, 30, 60, 90]
 const SIZE_LABELS = { '1min': '1 Min', '5min': '5 Min', '15min': '15 Min', '30min': '30 Min', '1hour': '1 Hour', '4hour': '4 Hour' }
@@ -92,7 +92,7 @@ export default function SwingZoneEdit() {
         candle_size: form.candle_size,
         period_days: parseInt(form.period_days),
         pivot_bars: parseInt(form.pivot_bars),
-        strong_level_pct: parseFloat(form.strong_level_pct),
+        strong_level_pct: Math.min(1, Math.max(0.01, parseFloat(form.strong_level_pct) || 0.5)),
         is_active: form.is_active,
       })
       setSaved(true)
@@ -221,10 +221,17 @@ export default function SwingZoneEdit() {
                 onChange={e => setForm(f => ({ ...f, pivot_bars: parseInt(e.target.value) || 5 }))}
               />
             </FormField>
-            <FormField label="Strong Level %" hint="Levels within this % of each other form a strong cluster">
-              <Select value={form.strong_level_pct} onChange={e => setForm(f => ({ ...f, strong_level_pct: parseFloat(e.target.value) }))}>
-                {STRONG_LEVEL_PCT_OPTIONS.map(p => <option key={p} value={p}>{p}%</option>)}
-              </Select>
+            <FormField label="Strong Level %" hint="Levels within this % of each other form a strong cluster (0.01–1%)">
+              <Input
+                type="number" min="0.01" max="1" step="0.01"
+                value={form.strong_level_pct}
+                onChange={e => {
+                  let v = parseFloat(e.target.value)
+                  if (isNaN(v)) { setForm(f => ({ ...f, strong_level_pct: e.target.value })); return }
+                  v = Math.min(1, Math.max(0.01, v))
+                  setForm(f => ({ ...f, strong_level_pct: v }))
+                }}
+              />
             </FormField>
           </div>
         </Card>

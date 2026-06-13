@@ -41,15 +41,17 @@ def find_nearest_levels(levels, current_price):
 
 
 def find_strong_levels(levels, pct):
-    """Clusters of >=2 same-type levels within `pct`% of each other.
+    """Clusters of >=2 same-type levels within `pct`% of each other, PLUS the
+    two extreme levels which are always treated as strong: the MAX resistance
+    (the outermost ceiling) and the MIN support (the outermost floor).
 
     Resistance clusters are represented by their MAX price (the ceiling);
-    support clusters by their MIN price (the floor).
+    support clusters by their MIN price (the floor). Extreme strong lines are
+    flagged with ``extreme=True`` so callers can surface them in logs.
     """
-    if not pct:
-        return {'strong_resistance': [], 'strong_support': []}
-
     def clusters(level_type, pick_strong):
+        if not pct:
+            return []
         sorted_levels = sorted(
             (l for l in (levels or []) if l['type'] == level_type),
             key=lambda l: l['price'],
@@ -73,9 +75,27 @@ def find_strong_levels(levels, pct):
             for g in groups if len(g) >= 2
         ]
 
+    strong_resistance = clusters('RESISTANCE', max)
+    strong_support = clusters('SUPPORT', min)
+
+    # The outermost levels are strong by definition — the highest resistance is
+    # the ultimate ceiling and the lowest support the ultimate floor. Add each
+    # as a single-member strong line unless a cluster already sits on it.
+    resistances = [l for l in (levels or []) if l['type'] == 'RESISTANCE']
+    supports = [l for l in (levels or []) if l['type'] == 'SUPPORT']
+
+    if resistances:
+        top = max(resistances, key=lambda l: l['price'])
+        if not any(c['price'] == top['price'] for c in strong_resistance):
+            strong_resistance.append({'price': top['price'], 'members': [top], 'extreme': True})
+    if supports:
+        bottom = min(supports, key=lambda l: l['price'])
+        if not any(c['price'] == bottom['price'] for c in strong_support):
+            strong_support.append({'price': bottom['price'], 'members': [bottom], 'extreme': True})
+
     return {
-        'strong_resistance': clusters('RESISTANCE', max),
-        'strong_support': clusters('SUPPORT', min),
+        'strong_resistance': strong_resistance,
+        'strong_support': strong_support,
     }
 
 
@@ -149,5 +169,6 @@ def evaluate_breakout(levels, strong_pct, prev_price, price, strict=False):
         'level_price': level_price,
         'nearest_price': nearest_level['price'],
         'cluster_size': len(cluster['members']),
+        'is_extreme': bool(cluster.get('extreme')),
         'last_level': last,
     }

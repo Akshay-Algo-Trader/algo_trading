@@ -13,13 +13,12 @@ import time
 import threading
 from datetime import datetime, timezone
 
-from app.services.swing_zone_detector import detect_sr_levels
+from app.services.swing_zone_detector import detect_sr_levels, _aggregate_to_4h
 from app.services.swing_breakout import (
     classify_by_ltp,
     find_nearest_levels,
     find_strong_levels,
 )
-from app.services.fvg_zone_detector import _aggregate_to_4h
 
 logger = logging.getLogger(__name__)
 

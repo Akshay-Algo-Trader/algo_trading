@@ -2,9 +2,25 @@
 
 from datetime import datetime, timezone, timedelta
 
-from app.services.fvg_zone_detector import _aggregate_to_4h
-
 _IST = timezone(timedelta(hours=5, minutes=30))
+
+
+def _aggregate_to_4h(candles_60m):
+    """Group every 4 consecutive 60-minute candles into a single 4H candle."""
+    aggregated = []
+    for i in range(0, len(candles_60m), 4):
+        group = candles_60m[i:i + 4]
+        if not group:
+            continue
+        aggregated.append({
+            'date': group[0]['date'],
+            'open': group[0]['open'],
+            'high': max(c['high'] for c in group),
+            'low': min(c['low'] for c in group),
+            'close': group[-1]['close'],
+            'volume': sum(c.get('volume', 0) for c in group),
+        })
+    return aggregated
 
 _KITE_INTERVAL = {
     '1min': 'minute',
