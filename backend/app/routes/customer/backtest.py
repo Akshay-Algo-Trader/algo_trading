@@ -845,11 +845,15 @@ def _attach_trade_charts(all_candles, trades, *, symbol, exchange, candle_size, 
             })
         markers.sort(key=lambda m: m['time'])
 
+        # LTP = opening price of the entry day
+        entry_i = date_index.get(t['entry_date'])
+        ltp_price = all_candles[entry_i]['open'] if entry_i is not None else None
+
         t['chart'] = {
             'candles': window,
             'level_lines': level_lines,
             'sr_lines': sr_lines,
-            'ref_price': None,  # entry is already marked by the arrow; skip the close line here
+            'ref_price': ltp_price,
             'markers': markers,
             'symbol': symbol,
             'exchange': exchange,

@@ -84,8 +84,7 @@ export default function BacktestChart({ chart }) {
         })
       }
 
-      // Reference close at period end — shows which side of price each level sits
-      // (the live chart's LTP line equivalent).
+      // LTP (opening price of the entry day) — shows which side of price each level sits.
       if (chart.ref_price != null) {
         series.createPriceLine({
           price: chart.ref_price,
@@ -93,7 +92,7 @@ export default function BacktestChart({ chart }) {
           lineWidth: 1,
           lineStyle: LineStyle.Dotted,
           axisLabelVisible: true,
-          title: `Last close ${chart.ref_price}`,
+          title: `LTP ${chart.ref_price}`,
         })
       }
 
@@ -177,7 +176,7 @@ export default function BacktestChart({ chart }) {
           {chart.ref_price != null && (
             <span className="flex items-center gap-1">
               <svg width="20" height="8" viewBox="0 0 20 8"><line x1="0" y1="4" x2="20" y2="4" stroke="#2563eb" strokeWidth="1.5" strokeDasharray="2 2" /></svg>
-              Last close
+              LTP (Day Open)
             </span>
           )}
           <span className="flex items-center gap-1"><span className="text-blue-600 font-bold">▲</span> Entry</span>
