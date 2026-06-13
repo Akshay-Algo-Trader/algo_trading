@@ -40,6 +40,7 @@ function planStateFromServer(serverPlanState) {
     detCandleHigh:  serverPlanState.det_candle_high,
     exitBelowFirstCandle: Boolean(serverPlanState.exit_below_first_candle),
     direction:      serverPlanState.direction,
+    breakout:       serverPlanState.breakout || null,
     resolvedContract: serverPlanState.resolved_contract
       ? {
           tradingsymbol:   serverPlanState.resolved_contract.tradingsymbol,

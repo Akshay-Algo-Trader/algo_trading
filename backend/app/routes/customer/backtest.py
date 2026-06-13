@@ -327,6 +327,18 @@ def _summarize_fills(fills, entry_price, direction):
 
 # ─── Swing-level breakout simulation ──────────────────────────────────────────
 
+def _breakout_label(signal):
+    """Human-readable breakout name that surfaces the strong-level kind — the
+    MAX RESISTANCE / MIN SUPPORT extreme (now treated as strong) vs a cluster —
+    mirroring the live engine's entry log."""
+    direction = signal['direction']
+    if signal.get('is_extreme'):
+        strong = 'MAX RESISTANCE' if direction == 'bullish' else 'MIN SUPPORT'
+    else:
+        strong = f"strong cluster ×{signal['cluster_size']}"
+    return f"{direction.upper()} Breakout — {strong}"
+
+
 def _rolling_window(all_candles, i, period_days):
     """Candles within `period_days` of all_candles[i]['date'], inclusive, up to index i."""
     end_dt = datetime.strptime(all_candles[i]['date'], '%Y-%m-%d %H:%M:%S')
@@ -367,7 +379,7 @@ def _simulate_swing_breakout(strategy_dict, swing_config, all_candles):
         detections.append({
             'date': det['date'],
             'candle': det,
-            'pattern_name': f"{direction.upper()} Breakout",
+            'pattern_name': _breakout_label(signal),
             'level_price': signal['level_price'],
         })
 
@@ -457,7 +469,7 @@ def _simulate_swing_breakout_options(strategy_dict, swing_config, all_candles, k
         detections.append({
             'date': det['date'],
             'candle': det,
-            'pattern_name': f"{direction.upper()} Breakout",
+            'pattern_name': _breakout_label(signal),
             'level_price': signal['level_price'],
         })
 
