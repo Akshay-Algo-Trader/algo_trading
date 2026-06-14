@@ -1,212 +1,206 @@
 import { Link } from 'react-router-dom';
 
-const CANDLE_PATTERNS = [
+const FEATURES = [
   {
-    name: 'Breakout A — Bullish',
-    direction: 'bullish',
-    market: 'Nifty / Sensex Options',
-    timeframes: '1D · 4H · 1H · 30M · 15M · 5M · 3M',
-    description: '2–3 day consolidation breakout. Enter above range on 3M/5M close. ATM near-expiry options.',
-    rules: [
-      '3-day highs within 0.15%–0.4% of each other',
-      'Daily close near day\'s high (0.10%–0.50%)',
-      'No resistance within 0.5% above range',
-      'Ascending CPR · Price above TC · RSI 57–70',
-    ],
-    targets: ['Nifty: 18–20 pts (T1), 35–40 pts (T2)', 'Sensex: 50 pts (T1), 100 pts (T2)', 'Index: 0.30% (T1), 0.45% (T2)'],
+    title: 'Swing Level Strategies',
+    desc: 'Configurable swing high/low detection on 4H structure drives precise, rule-based entries and exits — no guesswork.',
+    icon: (
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 17l6-6 4 4 8-8M21 7v5m0-5h-5" />
+    ),
   },
   {
-    name: 'Breakout A — Bearish',
-    direction: 'bearish',
-    market: 'Nifty / Sensex Options',
-    timeframes: '1D · 4H · 1H · 30M · 15M · 5M · 3M',
-    description: '2–3 day consolidation breakdown. Enter below range on 3M/5M close. ATM near-expiry options.',
-    rules: [
-      '3-day lows within 0.15%–0.4% of each other',
-      'Daily close near day\'s low (0.10%–0.50%)',
-      'No support within 0.5% below range',
-      'Descending CPR · Price below BC · RSI 30–45',
-    ],
-    targets: ['Nifty: 18–20 pts (T1), 35–40 pts (T2)', 'Sensex: 50 pts (T1), 100 pts (T2)', 'Index: 0.30% (T1), 0.45% (T2)'],
+    title: 'Real-time Market Data',
+    desc: 'Live quotes and order execution through Zerodha Kite Connect, wired straight into your strategy engine.',
+    icon: (
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+    ),
+  },
+  {
+    title: 'Historical Backtesting',
+    desc: 'Validate any strategy against months of historical candles and option contracts before risking real capital.',
+    icon: (
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3 3v18h18M7 14l3-3 3 3 5-5" />
+    ),
+  },
+  {
+    title: 'Paper & Live Trading',
+    desc: 'Run a strategy on a virtual account to prove it out, then promote it to live orders with a single switch.',
+    icon: (
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+    ),
   },
 ];
 
-function PatternCard({ pattern }) {
-  const isBullish = pattern.direction === 'bullish';
+const STEPS = [
+  { n: '01', title: 'Configure', desc: 'Define swing-level rules, entry conditions and trade filters for your strategy.' },
+  { n: '02', title: 'Backtest', desc: 'Replay against historical data and review trades on an interactive chart.' },
+  { n: '03', title: 'Paper Trade', desc: 'Deploy to a virtual account and track live performance risk-free.' },
+  { n: '04', title: 'Go Live', desc: 'Promote to real orders on Zerodha when the edge is proven.' },
+];
+
+function NavLinks({ className = '' }) {
   return (
-    <div className={`bg-white rounded-xl shadow-lg overflow-hidden border-t-4 ${isBullish ? 'border-green-500' : 'border-red-500'}`}>
-      <div className="p-6">
-        <div className="flex items-start justify-between mb-3">
-          <h3 className="font-bold text-gray-900 text-lg leading-tight">{pattern.name}</h3>
-          <span className={`flex-shrink-0 ml-3 text-xs px-2.5 py-1 rounded-full font-semibold ${isBullish ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-            {isBullish ? '▲ Bullish' : '▼ Bearish'}
-          </span>
-        </div>
-
-        <p className="text-sm text-gray-500 mb-1 font-medium">{pattern.market}</p>
-        <p className="text-xs text-gray-400 mb-4">{pattern.timeframes}</p>
-        <p className="text-sm text-gray-700 mb-4 leading-relaxed">{pattern.description}</p>
-
-        <div className="mb-4">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Setup Rules</p>
-          <ul className="space-y-1">
-            {pattern.rules.map((r, i) => (
-              <li key={i} className="flex items-start gap-2 text-xs text-gray-600">
-                <span className={`mt-0.5 flex-shrink-0 w-1.5 h-1.5 rounded-full ${isBullish ? 'bg-green-400' : 'bg-red-400'}`} />
-                {r}
-              </li>
-            ))}
-          </ul>
-        </div>
-
-        <div className={`rounded-lg p-3 ${isBullish ? 'bg-green-50' : 'bg-red-50'}`}>
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1.5">Targets</p>
-          {pattern.targets.map((t, i) => (
-            <p key={i} className={`text-xs font-medium ${isBullish ? 'text-green-700' : 'text-red-700'}`}>{t}</p>
-          ))}
-        </div>
-      </div>
+    <div className={className}>
+      <Link to="/" className="text-sm font-medium text-slate-200 hover:text-white transition-colors">
+        Home
+      </Link>
+      <Link to="/login" className="text-sm font-medium text-slate-200 hover:text-white transition-colors">
+        Customer Login
+      </Link>
+      <Link
+        to="/admin/login"
+        className="text-sm font-semibold text-white bg-emerald-500 hover:bg-emerald-400 px-4 py-2 rounded-lg transition-colors shadow-lg shadow-emerald-500/20"
+      >
+        Admin Login
+      </Link>
     </div>
   );
 }
 
 export default function HomePage() {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800">
-      {/* Navigation */}
-      <nav className="bg-white shadow-lg">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-blue-600">AlgoTrader</h1>
-          <div className="space-x-4">
-            <Link to="/" className="text-gray-700 hover:text-blue-600 font-semibold">
-              Home
+    <div className="min-h-screen bg-slate-950 text-slate-100 antialiased">
+      {/* Header */}
+      <header className="sticky top-0 z-30 backdrop-blur-md bg-slate-950/70 border-b border-white/5">
+        <nav className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2.5">
+            <span className="inline-flex items-center justify-center w-9 h-9 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 text-slate-950 font-extrabold text-sm">
+              AT
+            </span>
+            <span className="text-lg font-bold tracking-tight">AlgoTrader</span>
+          </Link>
+          <NavLinks className="flex items-center gap-6" />
+        </nav>
+      </header>
+
+      {/* Hero */}
+      <section className="relative overflow-hidden">
+        {/* Decorative glow */}
+        <div className="pointer-events-none absolute inset-0">
+          <div className="absolute -top-40 left-1/2 -translate-x-1/2 w-[700px] h-[700px] rounded-full bg-emerald-500/10 blur-3xl" />
+          <div className="absolute top-20 right-0 w-[400px] h-[400px] rounded-full bg-teal-500/10 blur-3xl" />
+        </div>
+
+        <div className="relative max-w-7xl mx-auto px-6 pt-24 pb-28 text-center">
+          <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full border border-emerald-400/30 bg-emerald-400/10 text-emerald-300 text-xs font-medium mb-8">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+            Automated swing-level trading
+          </span>
+
+          <h1 className="text-4xl sm:text-6xl font-extrabold tracking-tight leading-[1.1] max-w-4xl mx-auto">
+            Trade with discipline,
+            <span className="block bg-gradient-to-r from-emerald-300 via-teal-300 to-emerald-400 bg-clip-text text-transparent">
+              powered by algorithms.
+            </span>
+          </h1>
+
+          <p className="mt-6 text-lg text-slate-400 max-w-2xl mx-auto leading-relaxed">
+            Design rule-based strategies on swing structure, validate them against years of history,
+            and execute on live markets through Zerodha — all from one platform.
+          </p>
+
+          <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Link
+              to="/login"
+              className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold transition-colors shadow-lg shadow-emerald-500/25"
+            >
+              Customer Login
             </Link>
-            <a href="http://localhost:8000/admin/login" className="text-gray-700 hover:text-blue-600 font-semibold">
+            <Link
+              to="/admin/login"
+              className="w-full sm:w-auto px-7 py-3.5 rounded-xl border border-white/15 hover:border-white/30 hover:bg-white/5 text-white font-semibold transition-colors"
+            >
               Admin Login
-            </a>
+            </Link>
           </div>
         </div>
-      </nav>
+      </section>
 
-      {/* Hero Section */}
-      <div className="max-w-7xl mx-auto px-6 py-20 text-center text-white">
-        <h2 className="text-5xl font-bold mb-6">Algorithmic Trading Platform</h2>
-        <p className="text-xl mb-8 text-blue-100">
-          Automate your trading strategies with advanced candle patterns and real-time market data
-        </p>
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mt-16">
-          <div className="bg-white bg-opacity-10 backdrop-blur-lg rounded-lg p-8">
-            <div className="text-4xl mb-4">⚡</div>
-            <h3 className="text-2xl font-bold mb-3">Fast Execution</h3>
-            <p className="text-blue-100">Execute trades in milliseconds with our optimized infrastructure</p>
-          </div>
-          <div className="bg-white bg-opacity-10 backdrop-blur-lg rounded-lg p-8">
-            <div className="text-4xl mb-4">📊</div>
-            <h3 className="text-2xl font-bold mb-3">Real-time Analytics</h3>
-            <p className="text-blue-100">Monitor your portfolio and strategies with live charts and metrics</p>
-          </div>
-          <div className="bg-white bg-opacity-10 backdrop-blur-lg rounded-lg p-8">
-            <div className="text-4xl mb-4">🕯️</div>
-            <h3 className="text-2xl font-bold mb-3">Candle Patterns</h3>
-            <p className="text-blue-100">Proven candle pattern strategies that auto-execute entry and exit rules</p>
-          </div>
+      {/* Features */}
+      <section className="relative max-w-7xl mx-auto px-6 py-20">
+        <div className="text-center mb-14">
+          <p className="text-sm font-semibold text-emerald-400 uppercase tracking-widest mb-3">Platform</p>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">Everything you need to trade systematically</h2>
         </div>
 
-        <div className="mt-16 space-x-4">
-          <button className="bg-white text-blue-600 px-8 py-3 rounded-lg font-bold hover:bg-blue-50 transition">
-            Get Started
-          </button>
-          <button className="border-2 border-white text-white px-8 py-3 rounded-lg font-bold hover:bg-white hover:bg-opacity-10 transition">
-            Learn More
-          </button>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {FEATURES.map((f) => (
+            <div
+              key={f.title}
+              className="group rounded-2xl border border-white/10 bg-white/[0.03] p-6 hover:bg-white/[0.06] hover:border-emerald-400/30 transition-colors"
+            >
+              <div className="w-11 h-11 rounded-xl bg-emerald-500/10 border border-emerald-400/20 flex items-center justify-center text-emerald-300 mb-5 group-hover:scale-110 transition-transform">
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+                  {f.icon}
+                </svg>
+              </div>
+              <h3 className="font-semibold text-lg mb-2">{f.title}</h3>
+              <p className="text-sm text-slate-400 leading-relaxed">{f.desc}</p>
+            </div>
+          ))}
         </div>
-      </div>
+      </section>
 
-      {/* Candle Patterns Section */}
-      <div className="bg-white py-16">
-        <div className="max-w-7xl mx-auto px-6">
-          <div className="text-center mb-12">
-            <p className="text-sm font-semibold text-blue-600 uppercase tracking-widest mb-2">Pattern Library</p>
-            <h2 className="text-4xl font-bold text-gray-900 mb-4">Candle Patterns</h2>
-            <p className="text-lg text-gray-500 max-w-2xl mx-auto">
-              Professionally designed trading patterns for Nifty and Sensex options. Each pattern includes
-              precise entry, stop loss, and target rules — automated by the execution engine.
-            </p>
+      {/* How it works */}
+      <section className="relative border-y border-white/5 bg-white/[0.02]">
+        <div className="max-w-7xl mx-auto px-6 py-20">
+          <div className="text-center mb-14">
+            <p className="text-sm font-semibold text-emerald-400 uppercase tracking-widest mb-3">Workflow</p>
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight">From idea to live in four steps</h2>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-            {CANDLE_PATTERNS.map(p => (
-              <PatternCard key={p.name} pattern={p} />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+            {STEPS.map((s) => (
+              <div key={s.n} className="relative rounded-2xl border border-white/10 bg-slate-900/40 p-6">
+                <span className="text-4xl font-extrabold text-white/10">{s.n}</span>
+                <h3 className="font-semibold text-lg mt-3 mb-2">{s.title}</h3>
+                <p className="text-sm text-slate-400 leading-relaxed">{s.desc}</p>
+              </div>
             ))}
           </div>
+        </div>
+      </section>
 
-          {/* CPR Info Box */}
-          <div className="mt-12 bg-blue-50 rounded-2xl p-8 max-w-4xl mx-auto">
-            <h3 className="text-xl font-bold text-gray-900 mb-4">CPR Indicator Filter</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm text-gray-700">
-              <div>
-                <p className="font-semibold text-green-700 mb-2">Bullish CPR Conditions</p>
-                <ul className="space-y-1 text-gray-600">
-                  <li>• Today's CPR above yesterday's CPR</li>
-                  <li>• Price opens above TC</li>
-                  <li>• First 15M/30M candle closes above TC</li>
-                  <li>• RSI in 57–70 range</li>
-                </ul>
-              </div>
-              <div>
-                <p className="font-semibold text-red-700 mb-2">Bearish CPR Conditions</p>
-                <ul className="space-y-1 text-gray-600">
-                  <li>• Today's CPR below yesterday's CPR</li>
-                  <li>• Price opens below BC</li>
-                  <li>• First 15M/30M candle closes below BC</li>
-                  <li>• RSI in 30–45 range</li>
-                </ul>
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800 mb-2">Narrow CPR</p>
-                <p className="text-gray-600">(TC − BC) &lt; 0.25% of previous day's range, or below 20-day average CPR width. Best for trending trades.</p>
-              </div>
-              <div>
-                <p className="font-semibold text-gray-800 mb-2">Trade Filters</p>
-                <ul className="space-y-1 text-gray-600">
-                  <li>• Avoid 1–2 days after 2–3 consecutive losses</li>
-                  <li>• Avoid 4th day after 3 consecutive trend days</li>
-                  <li>• Exit if adverse move &gt; 0.35% (Nifty) / 0.21% (Sensex)</li>
-                </ul>
-              </div>
+      {/* CTA */}
+      <section className="relative max-w-7xl mx-auto px-6 py-24">
+        <div className="relative overflow-hidden rounded-3xl border border-emerald-400/20 bg-gradient-to-br from-emerald-500/10 via-teal-500/5 to-transparent p-12 text-center">
+          <div className="pointer-events-none absolute -top-24 left-1/2 -translate-x-1/2 w-[500px] h-[500px] rounded-full bg-emerald-500/10 blur-3xl" />
+          <div className="relative">
+            <h2 className="text-3xl sm:text-4xl font-bold tracking-tight max-w-2xl mx-auto">
+              Ready to put your strategy on autopilot?
+            </h2>
+            <p className="mt-4 text-slate-400 max-w-xl mx-auto">
+              Sign in to your trading account, or access the admin console to manage strategies and configurations.
+            </p>
+            <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-4">
+              <Link
+                to="/login"
+                className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold transition-colors shadow-lg shadow-emerald-500/25"
+              >
+                Customer Login
+              </Link>
+              <Link
+                to="/admin/login"
+                className="w-full sm:w-auto px-7 py-3.5 rounded-xl border border-white/15 hover:border-white/30 hover:bg-white/5 text-white font-semibold transition-colors"
+              >
+                Admin Login
+              </Link>
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Stats Section */}
-      <div className="bg-white bg-opacity-5 py-12">
-        <div className="max-w-7xl mx-auto px-6 grid grid-cols-1 md:grid-cols-4 gap-8 text-center text-white">
-          <div>
-            <div className="text-4xl font-bold">10K+</div>
-            <p className="text-blue-100">Active Traders</p>
-          </div>
-          <div>
-            <div className="text-4xl font-bold">$500M+</div>
-            <p className="text-blue-100">Assets Managed</p>
-          </div>
-          <div>
-            <div className="text-4xl font-bold">99.9%</div>
-            <p className="text-blue-100">Uptime</p>
-          </div>
-          <div>
-            <div className="text-4xl font-bold">24/7</div>
-            <p className="text-blue-100">Support</p>
-          </div>
-        </div>
-      </div>
+      </section>
 
       {/* Footer */}
-      <footer className="bg-blue-900 text-blue-100 py-8 mt-12">
-        <div className="max-w-7xl mx-auto px-6 text-center">
-          <p>&copy; 2026 AlgoTrader. All rights reserved.</p>
-          <p className="mt-2 text-sm">Backend API: http://localhost:5000/api/health</p>
+      <footer className="border-t border-white/5">
+        <div className="max-w-7xl mx-auto px-6 py-10 flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5">
+            <span className="inline-flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-emerald-400 to-teal-500 text-slate-950 font-extrabold text-xs">
+              AT
+            </span>
+            <span className="font-semibold">AlgoTrader</span>
+          </div>
+          <NavLinks className="flex items-center gap-6" />
+          <p className="text-sm text-slate-500">&copy; 2026 AlgoTrader. All rights reserved.</p>
         </div>
       </footer>
     </div>

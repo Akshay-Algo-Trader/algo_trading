@@ -6,6 +6,8 @@ import AdminLogin from './pages/AdminLogin'
 import AdminLayout from './layouts/AdminLayout'
 import Dashboard   from './pages/admin/Dashboard'
 import Customers   from './pages/admin/Customers'
+import CustomerEdit from './pages/admin/CustomerEdit'
+import AdminUsers  from './pages/admin/AdminUsers'
 import Strategies      from './pages/admin/Strategies'
 import StrategyEdit    from './pages/admin/StrategyEdit'
 import SwingZones        from './pages/admin/SwingZones'
@@ -57,6 +59,8 @@ export default function App() {
           <Route index element={<Navigate to="dashboard" replace />} />
           <Route path="dashboard"   element={<Dashboard />} />
           <Route path="customers"   element={<Customers />} />
+          <Route path="customers/:id/edit" element={<CustomerEdit />} />
+          <Route path="admin-users" element={<AdminUsers />} />
           <Route path="strategies"          element={<Strategies />} />
           <Route path="strategies/:id/edit" element={<StrategyEdit />} />
           <Route path="swing-zones"                        element={<SwingZones />} />

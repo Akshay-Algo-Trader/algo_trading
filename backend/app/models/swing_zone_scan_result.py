@@ -16,7 +16,7 @@ class SwingZoneScanResult(db.Model):
     period_to = db.Column(db.String(30), nullable=False)
     levels_detected = db.Column(JSON, nullable=False)
     total_levels = db.Column(db.Integer, nullable=False, default=0)
-    scanned_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    scanned_by = db.Column(db.Integer, db.ForeignKey('admin_users.id'), nullable=False, index=True)
     scanned_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     def to_dict(self):

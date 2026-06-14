@@ -75,7 +75,7 @@ export default function AdminLogin() {
               id="username"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="akshay.shelke"
+              placeholder="admin@example.com"
               required
               className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-transparent"
             />
@@ -114,15 +114,6 @@ export default function AdminLogin() {
             {loading ? 'Logging in...' : 'Login'}
           </button>
         </form>
-
-        {/* Demo Credentials */}
-        <div className="mt-8 pt-8 border-t border-gray-200">
-          <p className="text-gray-600 text-sm font-semibold mb-3">Demo Credentials:</p>
-          <div className="bg-gray-50 p-3 rounded-lg text-sm space-y-1">
-            <p><strong>Username:</strong> <code className="text-blue-600">akshay.shelke</code></p>
-            <p><strong>Password:</strong> <code className="text-blue-600">Akshay@123</code></p>
-          </div>
-        </div>
 
         {/* Back to Home */}
         <div className="mt-6 text-center">

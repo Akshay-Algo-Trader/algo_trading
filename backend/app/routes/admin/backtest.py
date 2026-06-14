@@ -1,9 +1,8 @@
 """Admin backtest endpoint. Same simulation as the customer route, but
 bypasses the UserStrategy assignment gate so admins can backtest any strategy.
 
-Uses the admin's own connected KiteConfig for historical data; falls back to
-any connected KiteConfig if the admin hasn't connected Kite themselves (the
-backtest just needs market history, not order placement)."""
+Uses any connected KiteConfig for historical data (admins don't own a Kite
+config; the backtest just needs market history, not order placement)."""
 
 import logging
 from datetime import datetime, timedelta
@@ -54,10 +53,8 @@ def run_admin_backtest():
 
     swing_config = strategy.swing_zone_config
 
-    # Prefer admin's own Kite config; fall back to any connected config
-    config = KiteConfig.query.filter_by(user_id=user_id).first()
-    if not (config and config.is_connected and config.access_token_encrypted):
-        config = KiteConfig.query.filter_by(is_connected=True).first()
+    # Admins don't own a Kite config; use any connected config for market data.
+    config = KiteConfig.query.filter_by(is_connected=True).first()
     if not (config and config.access_token_encrypted):
         return jsonify({'error': 'No connected Kite account available — connect one to run backtests'}), 400
 

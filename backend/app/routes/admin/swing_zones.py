@@ -134,9 +134,8 @@ def scan_swing_zones(config_id):
         end_date = datetime.now(_IST).date()
         start_date = end_date - timedelta(days=period_days)
 
-    kite_cfg = KiteConfig.query.filter_by(user_id=user_id).first()
-    if not (kite_cfg and kite_cfg.is_connected and kite_cfg.access_token_encrypted):
-        kite_cfg = KiteConfig.query.filter_by(is_connected=True).first()
+    # Admins don't own a Kite config; use any connected config for market data.
+    kite_cfg = KiteConfig.query.filter_by(is_connected=True).first()
     if not (kite_cfg and kite_cfg.access_token_encrypted):
         return jsonify({'error': 'No connected Kite account available'}), 400
 
@@ -355,9 +354,8 @@ def run_swing_level_scan():
     if scanner.has_running_scan():
         return jsonify({'error': 'A scan is already running — wait for it to finish or cancel it'}), 409
 
-    kite_cfg = KiteConfig.query.filter_by(user_id=user_id).first()
-    if not (kite_cfg and kite_cfg.is_connected and kite_cfg.access_token_encrypted):
-        kite_cfg = KiteConfig.query.filter_by(is_connected=True).first()
+    # Admins don't own a Kite config; use any connected config for market data.
+    kite_cfg = KiteConfig.query.filter_by(is_connected=True).first()
     if not (kite_cfg and kite_cfg.access_token_encrypted):
         return jsonify({'error': 'No connected Kite account available'}), 400
 
@@ -428,9 +426,8 @@ def get_swing_chart_candles():
     kite_interval = _KITE_INTERVAL.get(candle_size, '60minute')
     is_4h = candle_size == '4hour'
 
-    kite_cfg = KiteConfig.query.filter_by(user_id=user_id).first()
-    if not (kite_cfg and kite_cfg.is_connected and kite_cfg.access_token_encrypted):
-        kite_cfg = KiteConfig.query.filter_by(is_connected=True).first()
+    # Admins don't own a Kite config; use any connected config for market data.
+    kite_cfg = KiteConfig.query.filter_by(is_connected=True).first()
     if not (kite_cfg and kite_cfg.access_token_encrypted):
         return jsonify({'error': 'No connected Kite account available'}), 400
 
