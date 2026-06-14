@@ -6,7 +6,8 @@ os.environ['DATABASE_URL'] = 'mysql+mysqldb://akshay:akshay%40123@172.26.116.195
 
 from app import create_app
 from app.extensions import db as _db
-from app.models import User, UserRole, VirtualAccount
+from app.models import User, UserRole, VirtualAccount, AdminUser
+from flask_jwt_extended import create_access_token
 
 
 @pytest.fixture(scope='session')
@@ -32,14 +33,15 @@ def db(app):
 
 @pytest.fixture(scope='session')
 def admin_user(db, app):
+    """An admin in the admin_users table (admins are separate from customers)."""
     with app.app_context():
-        user = User.query.filter_by(email='admin@test.com').first()
-        if not user:
-            user = User(email='admin@test.com', role=UserRole.ADMIN)
-            user.set_password('Admin@123')
-            db.session.add(user)
+        admin = AdminUser.query.filter_by(email='admin@test.com').first()
+        if not admin:
+            admin = AdminUser(email='admin@test.com', is_active=True, session_timeout_minutes=60)
+            admin.set_password('Admin@123')
+            db.session.add(admin)
             db.session.commit()
-        return user.id
+        return admin.id
 
 
 @pytest.fixture(scope='session')
@@ -60,3 +62,9 @@ def customer_user(db, app):
 def get_token(client, email, password):
     resp = client.post('/api/auth/login', json={'email': email, 'password': password})
     return resp.get_json()['access_token']
+
+
+def get_admin_token(app, admin_id):
+    """Mint an admin JWT directly (admin login lives on the separate admin app)."""
+    with app.app_context():
+        return create_access_token(identity=str(admin_id), additional_claims={'actor': 'admin'})

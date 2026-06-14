@@ -13,7 +13,7 @@ class SwingZoneConfig(db.Model):
     pivot_bars = db.Column(db.Integer, nullable=False, default=5)
     strong_level_pct = db.Column(db.Float, nullable=False, default=0.5)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
-    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    created_by = db.Column(db.Integer, db.ForeignKey('admin_users.id'), nullable=False, index=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     scan_results = db.relationship('SwingZoneScanResult', backref='swing_zone_config', lazy=True, cascade='all, delete-orphan')

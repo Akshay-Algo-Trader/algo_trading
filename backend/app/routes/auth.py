@@ -37,8 +37,8 @@ def register():
     db.session.commit()
 
     return jsonify({
-        'access_token': create_access_token(identity=str(user.id)),
-        'refresh_token': create_refresh_token(identity=str(user.id)),
+        'access_token': create_access_token(identity=str(user.id), additional_claims={'actor': 'customer'}),
+        'refresh_token': create_refresh_token(identity=str(user.id), additional_claims={'actor': 'customer'}),
         'user': user.to_dict(),
     }), 201
 
@@ -57,8 +57,8 @@ def login():
         return jsonify({'error': 'Invalid credentials'}), 401
 
     return jsonify({
-        'access_token': create_access_token(identity=str(user.id)),
-        'refresh_token': create_refresh_token(identity=str(user.id)),
+        'access_token': create_access_token(identity=str(user.id), additional_claims={'actor': 'customer'}),
+        'refresh_token': create_refresh_token(identity=str(user.id), additional_claims={'actor': 'customer'}),
         'user': user.to_dict()
     }), 200
 
@@ -66,7 +66,9 @@ def login():
 @auth_bp.post('/api/auth/refresh')
 @jwt_required(refresh=True)
 def refresh():
-    return jsonify({'access_token': create_access_token(identity=get_jwt_identity())}), 200
+    return jsonify({
+        'access_token': create_access_token(identity=get_jwt_identity(), additional_claims={'actor': 'customer'})
+    }), 200
 
 
 @auth_bp.post('/api/auth/logout')

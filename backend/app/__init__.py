@@ -23,12 +23,17 @@ def create_app(config_name='development'):
     
     # Import models for Flask-Migrate to discover them
     from app.models import (
-        User, KiteConfig, Strategy, UserStrategy, TradingSession,
-        LiveOrder, PaperOrder, PaperPosition, VirtualAccount, AuditLog, Instrument
+        User, AdminUser, KiteConfig, Strategy, UserStrategy, TradingSession,
+        LiveOrder, PaperOrder, PaperPosition, VirtualAccount, VirtualTransaction,
+        AuditLog, Instrument
     )
 
     from app.routes import register_routes
     register_routes(app)
+
+    # Register custom CLI commands (e.g. `flask admin:user:create`)
+    from app.commands import register_commands
+    register_commands(app)
 
     # Start background scheduler (skip in testing to avoid conflicts)
     if not app.config.get('TESTING'):

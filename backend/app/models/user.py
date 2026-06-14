@@ -24,6 +24,7 @@ class User(db.Model):
     # Relationships
     kite_config = db.relationship('KiteConfig', uselist=False, backref='user', cascade='all, delete-orphan')
     virtual_account = db.relationship('VirtualAccount', uselist=False, backref='user', cascade='all, delete-orphan')
+    virtual_transactions = db.relationship('VirtualTransaction', backref='user', cascade='all, delete-orphan')
     sessions = db.relationship('TradingSession', backref='user', cascade='all, delete-orphan')
     live_orders = db.relationship('LiveOrder', backref='user', cascade='all, delete-orphan')
     paper_orders = db.relationship('PaperOrder', backref='user', cascade='all, delete-orphan')

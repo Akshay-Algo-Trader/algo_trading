@@ -1,10 +1,17 @@
+import uuid
 import pytest
-from tests.conftest import get_token
+from tests.conftest import get_token, get_admin_token
 
 
 @pytest.fixture(scope='module')
-def admin_token(client, admin_user):
-    return get_token(client, 'admin@test.com', 'Admin@123')
+def admin_token(app, admin_user):
+    return get_admin_token(app, admin_user)
+
+
+@pytest.fixture(scope='module')
+def new_email():
+    # Unique per run so tests don't collide with rows left in the persistent test DB.
+    return f'newcustomer_{uuid.uuid4().hex[:8]}@test.com'
 
 
 @pytest.fixture(scope='module')
@@ -30,23 +37,23 @@ class TestListUsers:
 
 
 class TestCreateUser:
-    def test_create_user_success(self, client, admin_token):
+    def test_create_user_success(self, client, admin_token, new_email):
         resp = client.post('/api/admin/users',
                            headers={'Authorization': f'Bearer {admin_token}'},
                            json={
-                               'email': 'newcustomer@test.com',
+                               'email': new_email,
                                'password': 'Pass@123',
                                'virtual_balance': 50000
                            })
         assert resp.status_code == 201
         data = resp.get_json()
-        assert data['user']['email'] == 'newcustomer@test.com'
+        assert data['user']['email'] == new_email
         assert data['user']['role'] == 'customer'
 
-    def test_create_user_duplicate_email(self, client, admin_token):
+    def test_create_user_duplicate_email(self, client, admin_token, new_email):
         resp = client.post('/api/admin/users',
                            headers={'Authorization': f'Bearer {admin_token}'},
-                           json={'email': 'newcustomer@test.com', 'password': 'Pass@123'})
+                           json={'email': new_email, 'password': 'Pass@123'})
         assert resp.status_code == 409
 
     def test_create_user_missing_fields(self, client, admin_token):

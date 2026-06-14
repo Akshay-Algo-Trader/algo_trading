@@ -37,7 +37,7 @@ class Strategy(db.Model):
     swing_zone_config_id = db.Column(db.Integer, db.ForeignKey('swing_zone_configs.id'), nullable=True, index=True)
     option_config = db.Column(JSON, nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
-    created_by = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    created_by = db.Column(db.Integer, db.ForeignKey('admin_users.id'), nullable=False, index=True)
     created_at = db.Column(db.DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
 
     # Relationships

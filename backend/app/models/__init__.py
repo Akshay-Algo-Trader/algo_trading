@@ -1,6 +1,7 @@
 """SQLAlchemy models package"""
 
 from app.models.user import User, UserRole
+from app.models.admin_user import AdminUser
 from app.models.kite_config import KiteConfig
 from app.models.swing_zone_config import SwingZoneConfig
 from app.models.swing_zone_scan_result import SwingZoneScanResult
@@ -11,6 +12,7 @@ from app.models.live_order import LiveOrder, TransactionType, OrderStatus
 from app.models.paper_order import PaperOrder, PaperOrderStatus, PaperOrderType
 from app.models.paper_position import PaperPosition
 from app.models.virtual_account import VirtualAccount
+from app.models.virtual_transaction import VirtualTransaction
 from app.models.audit_log import AuditLog
 from app.models.instrument import Instrument
 from app.models.execution_log import ExecutionLog
@@ -18,6 +20,7 @@ from app.models.execution_log import ExecutionLog
 __all__ = [
     'User',
     'UserRole',
+    'AdminUser',
     'KiteConfig',
     'SwingZoneConfig',
     'SwingZoneScanResult',
@@ -36,6 +39,7 @@ __all__ = [
     'PaperOrderType',
     'PaperPosition',
     'VirtualAccount',
+    'VirtualTransaction',
     'AuditLog',
     'Instrument',
     'ExecutionLog',

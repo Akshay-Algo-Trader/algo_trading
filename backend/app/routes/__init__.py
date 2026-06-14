@@ -1,5 +1,6 @@
 from app.routes.auth import auth_bp
 from app.routes.admin.users import admin_users_bp
+from app.routes.admin.admin_users import admin_admin_users_bp
 from app.routes.admin.strategies import admin_strategies_bp
 from app.routes.admin.swing_zones import admin_swing_zones_bp
 from app.routes.admin.kite import admin_kite_bp
@@ -19,6 +20,7 @@ from app.routes.customer.backtest import customer_backtest_bp
 def register_routes(app):
     app.register_blueprint(auth_bp)
     app.register_blueprint(admin_users_bp)
+    app.register_blueprint(admin_admin_users_bp)
     app.register_blueprint(admin_strategies_bp)
     app.register_blueprint(admin_swing_zones_bp)
     app.register_blueprint(admin_kite_bp)
