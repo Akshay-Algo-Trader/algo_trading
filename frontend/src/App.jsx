@@ -32,9 +32,29 @@ import CustomerPortfolio  from './pages/customer/Portfolio'
 import CustomerHistory    from './pages/customer/History'
 import CustomerBacktest   from './pages/customer/Backtest'
 
+// Decode a JWT payload (base64url) without verifying its signature. Used only
+// to decide which shell to render — the backend re-checks the `actor` claim on
+// every /api/admin/* request, so this is a UX gate, not a security boundary.
+function decodeJwt(token) {
+  try {
+    const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const json = decodeURIComponent(
+      atob(base64).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')
+    )
+    return JSON.parse(json)
+  } catch {
+    return null
+  }
+}
+
 function RequireAdminAuth() {
   const token = localStorage.getItem('access_token')
-  if (!token) return <Navigate to="/admin/login" replace />
+  // Require an admin-actor token (mirrors the backend's admin_required). A
+  // leftover customer token must not load the admin shell — otherwise every
+  // /api/admin/* call 403s and the pages just show "Failed to load".
+  if (!token || decodeJwt(token)?.actor !== 'admin') {
+    return <Navigate to="/admin/login" replace />
+  }
   return <AdminLayout />
 }
 
