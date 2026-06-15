@@ -1,11 +1,12 @@
 import { useState, useEffect } from 'react'
 import axiosInstance from '../../api/axiosInstance'
-import BacktestPanel, { BacktestControls } from '../../components/BacktestPanel'
+import BacktestPanel, { BacktestControls, defaultDateRange } from '../../components/BacktestPanel'
 
 export default function Backtest() {
   const [strategies, setStrategies] = useState([])
   const [selectedId, setSelectedId] = useState('')
-  const [days,       setDays]       = useState(90)
+  const [startDate,  setStartDate]  = useState(defaultDateRange().startDate)
+  const [endDate,    setEndDate]    = useState(defaultDateRange().endDate)
   const [loading,    setLoading]    = useState(false)
   const [result,     setResult]     = useState(null)
   const [error,      setError]      = useState('')
@@ -28,7 +29,8 @@ export default function Backtest() {
     try {
       const { data } = await axiosInstance.post('/api/customer/backtest', {
         strategy_id: Number(selectedId),
-        days,
+        start_date: startDate,
+        end_date: endDate,
       })
       setResult(data)
     } catch (err) {
@@ -63,14 +65,22 @@ export default function Backtest() {
             ))}
           </select>
         </div>
-        <BacktestControls days={days} onChangeDays={setDays} onRun={handleRun} loading={loading} disabled={!selectedId} />
+        <BacktestControls
+          startDate={startDate}
+          endDate={endDate}
+          onChangeStart={setStartDate}
+          onChangeEnd={setEndDate}
+          onRun={handleRun}
+          loading={loading}
+          disabled={!selectedId}
+        />
       </div>
 
       <BacktestPanel
         result={result}
         loading={loading}
         error={error}
-        emptyHint="Select a strategy and duration, then run backtest"
+        emptyHint="Select a strategy and date range, then run backtest"
       />
     </div>
   )

@@ -18,6 +18,7 @@ from app.services.swing_breakout import (
 )
 from app.services.swing_zone_detector import (
     _BUFFER_DAYS,
+    _IST,
     _MAX_FETCH_DAYS,
     detect_sr_levels,
     fetch_candles_for_swing_config,
@@ -26,6 +27,47 @@ from app.services.swing_zone_detector import (
 logger = logging.getLogger(__name__)
 
 customer_backtest_bp = Blueprint('customer_backtest', __name__)
+
+
+def _parse_iso_date(value):
+    """Parse a 'YYYY-MM-DD' string into a date; return None if unparseable."""
+    try:
+        return datetime.strptime(str(value)[:10], '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        return None
+
+
+def _resolve_date_window(data, candle_size, period_days):
+    """Resolve the requested backtest report window from the request body.
+
+    Accepts an explicit date range (`start_date` / `end_date`, YYYY-MM-DD) and
+    falls back to the legacy fixed `days` count ending today. Returns
+    (start_date, end_date, extra_days), where extra_days is the look-back beyond
+    the swing period that must be fetched to cover the window, capped to Kite's
+    per-interval history limit. Raises ValueError on an invalid range.
+    """
+    today = datetime.now(_IST).date()
+
+    end_date = _parse_iso_date(data.get('end_date'))
+    if end_date is None or end_date > today:
+        end_date = today
+
+    start_date = _parse_iso_date(data.get('start_date'))
+    if start_date is None:
+        try:
+            days = int(data.get('days', 90))
+        except (ValueError, TypeError):
+            days = 90
+        days = min(max(days, 1), 365)
+        start_date = end_date - timedelta(days=days)
+
+    if start_date >= end_date:
+        raise ValueError('Invalid date range — start date must be before end date')
+
+    requested_days = (end_date - start_date).days
+    max_extra = _MAX_FETCH_DAYS.get(candle_size, 400) - _BUFFER_DAYS.get(candle_size, 40) - period_days
+    extra_days = min(requested_days, max(max_extra, 1))
+    return start_date, end_date, extra_days
 
 
 def _j(val, default=None):
@@ -388,7 +430,18 @@ def _rolling_window(all_candles, i, period_days):
 def _simulate_swing_breakout(strategy_dict, swing_config, all_candles):
     """Walk forward over swing-config-granularity candles, recomputing S&R levels
     on a rolling `period_days` window and entering on the same breakout signal
-    the live engine uses (`evaluate_breakout`)."""
+    the live engine uses (`evaluate_breakout`).
+
+    Every breakout crossing is recorded as a detection — including ones that fire
+    while a trade is still open — so the report shows how many times price broke a
+    level each day. Trades are taken one position at a time (sequential): after a
+    trade exits, scanning resumes on the very next candle and re-enters on the
+    next breakout.
+
+    Prior-LTP reference for each breakout check is the previous candle's close (so
+    the first candle of a day uses the previous day's closing LTP); right after a
+    trade exits, the exit price seeds that reference for further breakout checks on
+    the same trading day, until the next entry fires."""
     pivot_bars  = int(swing_config.get('pivot_bars') or 5)
     strong_pct  = swing_config.get('strong_level_pct')
     period_days = int(swing_config.get('period_days') or 30)
@@ -397,6 +450,9 @@ def _simulate_swing_breakout(strategy_dict, swing_config, all_candles):
     detections = []
     trades = []
 
+    busy_until_index = 0   # last candle index of an open trade — no new entry through it
+    exit_reseed = None     # {'after_index','day','price'} — post-exit prior-LTP seed
+
     i = 1
     while i < len(all_candles) - 1:
         window = _rolling_window(all_candles, i, period_days)
@@ -404,8 +460,15 @@ def _simulate_swing_breakout(strategy_dict, swing_config, all_candles):
             i += 1
             continue
 
+        # Prior-LTP reference: previous candle close, unless we exited a trade
+        # earlier on this same day (then the exit price seeds the next breakout).
+        prev_ltp = all_candles[i - 1]['close']
+        if (exit_reseed and i > exit_reseed['after_index']
+                and all_candles[i]['date'][:10] == exit_reseed['day']):
+            prev_ltp = exit_reseed['price']
+
         levels = detect_sr_levels(window, pivot_bars)
-        signal = evaluate_breakout(levels, strong_pct, all_candles[i - 1]['close'], all_candles[i]['close'])
+        signal = evaluate_breakout(levels, strong_pct, prev_ltp, all_candles[i]['close'])
         if not signal:
             i += 1
             continue
@@ -418,6 +481,12 @@ def _simulate_swing_breakout(strategy_dict, swing_config, all_candles):
             'pattern_name': _breakout_label(signal),
             'level_price': signal['level_price'],
         })
+
+        # Sequential trading: while a position is still open, record the breakout
+        # (above) but don't open another trade.
+        if i <= busy_until_index:
+            i += 1
+            continue
 
         if not _check_candle_size(strategy_dict, det):
             i += 1
@@ -453,14 +522,22 @@ def _simulate_swing_breakout(strategy_dict, swing_config, all_candles):
             ],
         })
 
-        # Advance to candle right after the last fill so we don't double-enter
+        # Resolve the exit candle index; the held span is recorded as detections
+        # but not re-traded, and scanning resumes on the candle after the exit.
         last_fill_index = i + 1
         if fills:
             for j in range(i + 1, len(all_candles)):
                 if all_candles[j]['date'] == fills[-1]['date']:
                     last_fill_index = j
                     break
-        i = last_fill_index + 1
+
+        busy_until_index = last_fill_index
+        exit_reseed = {
+            'after_index': last_fill_index,
+            'day':         all_candles[last_fill_index]['date'][:10],
+            'price':       round(vwap_exit, 2),
+        }
+        i += 1
 
     return detections, trades
 
@@ -471,6 +548,11 @@ def _simulate_swing_breakout_options(strategy_dict, swing_config, all_candles, k
     each entry is simulated against the historical daily premium series of the
     resolved CE/PE contract. Detection candles where no live NFO/BFO contract can
     be resolved are returned in `skipped_dates`.
+
+    Mirrors the equity simulator: every breakout is recorded (even during an open
+    trade), trades are sequential with re-entry after each exit, and the prior-LTP
+    reference reseeds to the underlying close at the exit for further same-day
+    breakout checks.
     """
     from app.services.option_resolver import resolve_option_contract
 
@@ -487,6 +569,9 @@ def _simulate_swing_breakout_options(strategy_dict, swing_config, all_candles, k
     trades        = []
     skipped_dates = []
 
+    busy_until_index = 0   # last candle index of an open trade — no new entry through it
+    exit_reseed = None     # {'after_index','day','price'} — post-exit prior-LTP seed
+
     i = 1
     while i < len(all_candles) - 1:
         window = _rolling_window(all_candles, i, period_days)
@@ -494,8 +579,16 @@ def _simulate_swing_breakout_options(strategy_dict, swing_config, all_candles, k
             i += 1
             continue
 
+        # Prior-LTP reference: previous candle close, unless we exited a trade
+        # earlier on this same day (then the exit's underlying close seeds the next
+        # breakout check on the underlying timeline).
+        prev_ltp = all_candles[i - 1]['close']
+        if (exit_reseed and i > exit_reseed['after_index']
+                and all_candles[i]['date'][:10] == exit_reseed['day']):
+            prev_ltp = exit_reseed['price']
+
         levels = detect_sr_levels(window, pivot_bars)
-        signal = evaluate_breakout(levels, strong_pct, all_candles[i - 1]['close'], all_candles[i]['close'])
+        signal = evaluate_breakout(levels, strong_pct, prev_ltp, all_candles[i]['close'])
         if not signal:
             i += 1
             continue
@@ -508,6 +601,12 @@ def _simulate_swing_breakout_options(strategy_dict, swing_config, all_candles, k
             'pattern_name': _breakout_label(signal),
             'level_price': signal['level_price'],
         })
+
+        # Sequential trading: while a position is still open, record the breakout
+        # (above) but don't open another trade.
+        if i <= busy_until_index:
+            i += 1
+            continue
 
         if not _check_candle_size(strategy_dict, det):
             i += 1
@@ -592,15 +691,24 @@ def _simulate_swing_breakout_options(strategy_dict, swing_config, all_candles, k
             ],
         })
 
-        # Advance past last fill date in the underlying timeline (premium dates are
-        # day-only; compare against the date portion of the underlying candle date)
+        # Resolve the exit candle index in the underlying timeline (premium dates
+        # are day-only; compare against the date portion of the underlying candle).
+        # The held span is recorded as detections but not re-traded; scanning
+        # resumes on the candle after the exit.
         last_fill_index = i + 1
         if fills:
             for j in range(i + 1, len(all_candles)):
                 if all_candles[j]['date'][:10] == fills[-1]['date']:
                     last_fill_index = j
                     break
-        i = last_fill_index + 1
+
+        busy_until_index = last_fill_index
+        exit_reseed = {
+            'after_index': last_fill_index,
+            'day':         all_candles[last_fill_index]['date'][:10],
+            'price':       all_candles[last_fill_index]['close'],
+        }
+        i += 1
 
     return detections, trades, skipped_dates
 
@@ -873,10 +981,6 @@ def run_backtest():
     data    = request.get_json() or {}
 
     strategy_id = data.get('strategy_id')
-    try:
-        days = min(max(int(data.get('days', 90)), 30), 365)
-    except (ValueError, TypeError):
-        days = 90
 
     if not strategy_id:
         return jsonify({'error': 'strategy_id required'}), 400
@@ -919,11 +1023,14 @@ def run_backtest():
             candle_exchange = strategy.exchange.value if hasattr(strategy.exchange, 'value') else str(strategy.exchange)
 
         candle_size = swing_config.candle_size
-        max_extra = _MAX_FETCH_DAYS.get(candle_size, 400) - _BUFFER_DAYS.get(candle_size, 40) - swing_config.period_days
-        days = min(days, max(max_extra, 1))
+        try:
+            start_date, end_date, extra_days = _resolve_date_window(data, candle_size, swing_config.period_days)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         all_candles = fetch_candles_for_swing_config(
-            kite, swing_config.to_dict(), candle_symbol, candle_exchange, extra_days=days,
+            kite, swing_config.to_dict(), candle_symbol, candle_exchange,
+            extra_days=extra_days, end_date=end_date,
         )
 
         if len(all_candles) < swing_config.pivot_bars * 2 + 1:
@@ -940,9 +1047,9 @@ def run_backtest():
             detections, trades = _simulate_swing_breakout(strategy_dict, swing_config_dict, all_candles)
             skipped_dates = []
 
-        # Restrict the report window to the requested `days` ending at the last candle
-        last_dt = datetime.strptime(all_candles[-1]['date'], '%Y-%m-%d %H:%M:%S')
-        cutoff_dt = last_dt - timedelta(days=days)
+        # Restrict the report window to the requested [start_date, end_date] range
+        # (candles are already fetched up to end_date, so clip on the start side).
+        cutoff_dt = datetime.combine(start_date, datetime.min.time())
         report_candles = [
             c for c in all_candles
             if datetime.strptime(c['date'], '%Y-%m-%d %H:%M:%S') >= cutoff_dt
@@ -987,7 +1094,7 @@ def run_backtest():
 
         return jsonify({
             'strategy':           strategy_dict,
-            'period':             {'from': period_from, 'to': period_to, 'days': days},
+            'period':             {'from': period_from, 'to': period_to, 'days': (end_date - start_date).days},
             'candles_analyzed':   len(report_candles),
             'pattern_detections': detections,
             'trades':             trades,
