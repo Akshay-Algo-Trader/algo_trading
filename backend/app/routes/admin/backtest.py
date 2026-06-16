@@ -5,7 +5,7 @@ Uses any connected KiteConfig for historical data (admins don't own a Kite
 config; the backtest just needs market history, not order placement)."""
 
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt_identity
@@ -14,10 +14,9 @@ from app.models import KiteConfig
 from app.models.strategy import Strategy
 from app.routes.decorators import admin_required
 from app.routes.customer.backtest import (
-    _BUFFER_DAYS,
-    _MAX_FETCH_DAYS,
     _attach_trade_charts,
     _build_chart,
+    _resolve_date_window,
     _simulate_swing_breakout,
     _simulate_swing_breakout_options,
     fetch_candles_for_swing_config,
@@ -36,10 +35,6 @@ def run_admin_backtest():
     data    = request.get_json() or {}
 
     strategy_id = data.get('strategy_id')
-    try:
-        days = min(max(int(data.get('days', 90)), 30), 365)
-    except (ValueError, TypeError):
-        days = 90
 
     if not strategy_id:
         return jsonify({'error': 'strategy_id required'}), 400
@@ -79,11 +74,14 @@ def run_admin_backtest():
             candle_exchange = strategy.exchange.value if hasattr(strategy.exchange, 'value') else str(strategy.exchange)
 
         candle_size = swing_config.candle_size
-        max_extra = _MAX_FETCH_DAYS.get(candle_size, 400) - _BUFFER_DAYS.get(candle_size, 40) - swing_config.period_days
-        days = min(days, max(max_extra, 1))
+        try:
+            start_date, end_date, extra_days = _resolve_date_window(data, candle_size, swing_config.period_days)
+        except ValueError as exc:
+            return jsonify({'error': str(exc)}), 400
 
         all_candles = fetch_candles_for_swing_config(
-            kite, swing_config.to_dict(), candle_symbol, candle_exchange, extra_days=days,
+            kite, swing_config.to_dict(), candle_symbol, candle_exchange,
+            extra_days=extra_days, end_date=end_date,
         )
 
         if len(all_candles) < swing_config.pivot_bars * 2 + 1:
@@ -100,9 +98,9 @@ def run_admin_backtest():
             detections, trades = _simulate_swing_breakout(strategy_dict, swing_config_dict, all_candles)
             skipped_dates = []
 
-        # Restrict the report window to the requested `days` ending at the last candle
-        last_dt = datetime.strptime(all_candles[-1]['date'], '%Y-%m-%d %H:%M:%S')
-        cutoff_dt = last_dt - timedelta(days=days)
+        # Restrict the report window to the requested [start_date, end_date] range
+        # (candles are already fetched up to end_date, so clip on the start side).
+        cutoff_dt = datetime.combine(start_date, datetime.min.time())
         report_candles = [
             c for c in all_candles
             if datetime.strptime(c['date'], '%Y-%m-%d %H:%M:%S') >= cutoff_dt
@@ -144,7 +142,7 @@ def run_admin_backtest():
 
         return jsonify({
             'strategy':           strategy_dict,
-            'period':             {'from': period_from, 'to': period_to, 'days': days},
+            'period':             {'from': period_from, 'to': period_to, 'days': (end_date - start_date).days},
             'candles_analyzed':   len(report_candles),
             'pattern_detections': detections,
             'trades':             trades,

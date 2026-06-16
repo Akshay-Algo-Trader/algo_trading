@@ -73,6 +73,7 @@ from app.services.ticker_service import ticker_service
 logger = logging.getLogger(__name__)
 
 _POLL_SECONDS = 3            # how often the engine checks LTP / runs eval
+_REPLAY_POLL_SECONDS = 1     # replay steps one candle per second (faster than live)
 _CANDLE_CACHE_TTL_SEC = 300  # 5 min — swing candles refresh
 _BROKERAGE_FLAT = 20.0
 _SQUAREOFF_H, _SQUAREOFF_M = 15, 20  # intraday square-off ~15:20 IST (before 15:30 NSE close)
@@ -137,6 +138,15 @@ class TradingEngine:
         # Candle cache
         self._candles_cache: list = []
         self._candles_cache_ts: float = 0
+
+        # Replay mode — a paper-style simulation stepped over historical candles.
+        # The virtual clock advances one swing-config candle per poll; the cursor's
+        # candle close is the LTP and `_replay_candles[:cursor+1]` is the visible
+        # history. Set in _hydrate_from_db when the session mode is REPLAY.
+        self._replay: bool = False
+        self._replay_candles: list = []
+        self._replay_cursor: int = 0
+        self._replay_start_at: Optional[datetime] = None
 
         # Throttle DB persistence of LTP changes
         self._last_persisted_ltp: Optional[float] = None
@@ -203,6 +213,22 @@ class TradingEngine:
             'last_ltp':         self._prev_ltp,
             'entry_price':      self._entry_price,
             'plan_state':       self._serialize_plan_state(),
+            'replay':           self._replay_status() if self._replay else None,
+        }
+
+    def _replay_status(self) -> dict:
+        total = len(self._replay_candles)
+        cursor = min(self._replay_cursor, total)
+        if 0 <= self._replay_cursor < total:
+            virtual_time = self._replay_candles[self._replay_cursor]['date']
+        else:
+            virtual_time = self._replay_candles[-1]['date'] if total else None
+        return {
+            'active':       self._running,
+            'virtual_time': virtual_time,
+            'cursor':       cursor,
+            'total':        total,
+            'progress_pct': round(cursor / total * 100, 1) if total else 0,
         }
 
     @property
@@ -278,6 +304,16 @@ class TradingEngine:
             raise ValueError(f'Strategy {self.strategy_id} has no Swing Zone Config configured')
         self._swing_config = strategy.swing_zone_config.to_dict()
 
+        # Replay mode — preload the historical candle series and place the virtual
+        # cursor at the requested start. Price/candles are served from this buffer
+        # instead of the live ticker (see _get_ltp / _get_swing_candles).
+        if session.mode == SessionMode.REPLAY:
+            self._replay = True
+            self._replay_start_at = session.replay_start_at
+            if self._replay_start_at is None:
+                raise ValueError('Replay session is missing its start time')
+            self._load_replay_candles()
+
         # Resume in-memory state from persisted columns
         self._phase = session.phase or 'monitoring'
         self._pattern_detected = bool(session.pattern_detected)
@@ -301,7 +337,7 @@ class TradingEngine:
             except Exception:
                 self._instrument_token = None
 
-        if self._instrument_token:
+        if self._instrument_token and not self._replay:
             try:
                 cfg = KiteConfig.query.filter_by(user_id=self.user_id).first()
                 if cfg and cfg.is_connected and cfg.access_token_encrypted:
@@ -314,10 +350,17 @@ class TradingEngine:
                 )
 
         sc = self._swing_config
+        mode_note = ''
+        if self._replay:
+            # Display the actual replay start time in IST, not just the current candle
+            replay_start_ist = self._replay_start_at.astimezone(IST)
+            replay_start_str = replay_start_ist.strftime('%Y-%m-%d %H:%M:%S')
+            candle_at_start = self._replay_candles[self._replay_cursor]['date']
+            mode_note = f" | REPLAY from {replay_start_str} (first candle at {candle_at_start}, {len(self._replay_candles) - self._replay_cursor} candles ahead)"
         self._log(
             f"Engine started — watching {self._symbol} on {self._exchange}"
             f" | Swing Zone: {sc.get('name')} ({sc.get('candle_size')}, {sc.get('period_days')}d, "
-            f"pivot={sc.get('pivot_bars')}, strong={sc.get('strong_level_pct')}%)",
+            f"pivot={sc.get('pivot_bars')}, strong={sc.get('strong_level_pct')}%){mode_note}",
             'info',
         )
 
@@ -414,10 +457,16 @@ class TradingEngine:
 
     def _log(self, message: str, severity: str = 'info'):
         try:
+            # For replay mode, capture the virtual time from the current candle
+            virtual_ts = None
+            if self._replay and 0 <= self._replay_cursor < len(self._replay_candles):
+                virtual_ts = self._replay_candles[self._replay_cursor]['date']
+
             db.session.add(ExecutionLog(
                 session_id=self.session_id,
                 severity=severity,
                 message=message,
+                virtual_ts=virtual_ts,
             ))
             db.session.commit()
 
@@ -452,7 +501,54 @@ class TradingEngine:
     #  Price source
     # ──────────────────────────────────────────────────────────────────────
 
+    def _virtual_now(self) -> datetime:
+        """Wall-clock used for time-based logic. In replay it's the IST timestamp
+        of the candle under the cursor; live/paper use the real clock."""
+        if self._replay and 0 <= self._replay_cursor < len(self._replay_candles):
+            ts = self._replay_candles[self._replay_cursor]['date']
+            return datetime.strptime(ts, '%Y-%m-%d %H:%M:%S').replace(tzinfo=IST)
+        return datetime.now(IST)
+
+    def _load_replay_candles(self):
+        """Preload the swing-config candle series covering the replay window and
+        set the cursor to the first candle at/after the requested start. Enough
+        history must precede the start for swing-level detection."""
+        cfg = KiteConfig.query.filter_by(user_id=self.user_id).first()
+        if not (cfg and cfg.is_connected and cfg.access_token_encrypted):
+            raise ValueError('Kite not connected — cannot load replay history')
+
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=decrypt(cfg.api_key_encrypted))
+        kite.set_access_token(decrypt(cfg.access_token_encrypted))
+
+        start_ist = self._replay_start_at.astimezone(IST)
+        extra_days = max((datetime.now(IST).date() - start_ist.date()).days, 1)
+        candles = fetch_candles_for_swing_config(
+            kite, self._swing_config, self._symbol, self._exchange, extra_days=extra_days,
+        )
+        if not candles:
+            raise ValueError('No historical candles available for the replay window')
+
+        start_str = start_ist.strftime('%Y-%m-%d %H:%M:%S')
+        cursor = next((i for i, c in enumerate(candles) if c['date'] >= start_str), None)
+        if cursor is None:
+            raise ValueError('Replay start is beyond the available candle history')
+
+        pivot_bars = int(self._swing_config.get('pivot_bars') or 5)
+        if cursor < pivot_bars * 2 + 1:
+            raise ValueError(
+                'Not enough candle history before the replay start for level detection — pick a later start'
+            )
+
+        self._replay_candles = candles
+        self._replay_cursor = cursor
+
     def _get_ltp(self) -> Optional[float]:
+        # Replay: the cursor candle's close is the current LTP.
+        if self._replay:
+            if 0 <= self._replay_cursor < len(self._replay_candles):
+                return float(self._replay_candles[self._replay_cursor]['close'])
+            return None
         # Prefer WebSocket-backed cache
         if self._instrument_token:
             v = ticker_service.get_ltp(self._instrument_token)
@@ -473,6 +569,12 @@ class TradingEngine:
             return None
 
     def _get_swing_candles(self) -> list:
+        # Replay: history visible "now" is everything up to and including the
+        # cursor candle. Mirror it into the cache so get_chart_data() advances too.
+        if self._replay:
+            visible = self._replay_candles[:self._replay_cursor + 1]
+            self._candles_cache = visible
+            return visible
         now = time.time()
         if self._candles_cache and (now - self._candles_cache_ts) < _CANDLE_CACHE_TTL_SEC:
             return self._candles_cache
@@ -506,11 +608,14 @@ class TradingEngine:
                         db.session.rollback()
                     except Exception:
                         pass
-                time.sleep(_POLL_SECONDS)
+                time.sleep(_REPLAY_POLL_SECONDS if self._replay else _POLL_SECONDS)
 
     def _tick(self):
         ltp = self._get_ltp()
         if ltp is None:
+            # In replay, a None LTP means the cursor has run past the last candle.
+            if self._replay:
+                self._finish_replay()
             return
 
         ltp_changed = self._prev_ltp != ltp
@@ -530,6 +635,24 @@ class TradingEngine:
             self._persist_session_state(ltp_changed=True)
             self._last_persisted_ltp = ltp
             self._last_persisted_ltp_at = now
+
+        # Advance the replay clock one candle per poll (after evaluating this one).
+        if self._replay and self._running:
+            self._replay_cursor += 1
+
+    def _finish_replay(self):
+        self._log('Replay complete — reached the latest available candle', 'success')
+        try:
+            session = db.session.get(TradingSession, self.session_id)
+            if session and session.status == SessionStatus.ACTIVE:
+                session.status = SessionStatus.STOPPED
+                session.stopped_at = datetime.now(timezone.utc)
+                session.auto_stop_reason = 'replay_complete'
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logger.exception("Failed to mark replay session %d complete", self.session_id)
+        self._running = False
 
     # ──────────────────────────────────────────────────────────────────────
     #  Monitoring → entry
@@ -626,7 +749,7 @@ class TradingEngine:
         self._partial_booked = False
         self._break_even_triggered = False
         self._entry_price = entry_price
-        self._entry_time = datetime.now(IST)
+        self._entry_time = self._virtual_now()
         self._phase = 'in_position'
 
         # Compose informative log
@@ -695,7 +818,7 @@ class TradingEngine:
         if not self._entry_time:
             return False, ''
         trade_type = self._strategy_dict.get('trade_type') or 'swing'
-        now = datetime.now(IST)
+        now = self._virtual_now()
         if trade_type == 'intraday':
             if now.date() > self._entry_time.date():
                 return True, 'Intraday square-off (next session)'
@@ -926,7 +1049,9 @@ class TradingEngine:
         if qty <= 0:
             return False
         try:
-            if self.mode == 'paper':
+            if self.mode == 'replay':
+                return self._place_replay(txn_type, qty, price, tag=tag)
+            elif self.mode == 'paper':
                 return self._place_paper(txn_type, qty, price, tag=tag)
             else:
                 return self._place_live(txn_type, qty, price, tag=tag)
@@ -995,6 +1120,31 @@ class TradingEngine:
         db.session.commit()
         return True
 
+    # ─── Replay order path ───────────────────────────────────────────────────
+
+    def _place_replay(self, txn_type: str, qty: int, price: float, *, tag: str) -> bool:
+        """Replay fill — records a simulated order on the replay session for the
+        chart/report, but deliberately does NOT touch the paper VirtualAccount or
+        PaperPosition: replay stays fully isolated from paper trading. fill_time is
+        the virtual clock so chart markers land on the right historical candle."""
+        fill_time = self._virtual_now().astimezone(timezone.utc)
+        db.session.add(PaperOrder(
+            user_id=self.user_id, session_id=self.session_id,
+            symbol=self._symbol, exchange=self._exchange,
+            transaction_type=PaperOrderType[txn_type],
+            order_type=PaperOrderCategory.MARKET,
+            quantity=qty,
+            trigger_price=price, fill_price=price, fill_time=fill_time,
+            status=PaperOrderStatus.FILLED,
+        ))
+        db.session.add(AuditLog(
+            user_id=self.user_id, event_type=f"REPLAY_{txn_type}", mode='replay',
+            payload={'session_id': self.session_id, 'symbol': self._symbol, 'qty': qty,
+                     'price': price, 'tag': tag, 'virtual_time': self._virtual_now().isoformat()},
+        ))
+        db.session.commit()
+        return True
+
     # ─── Live order path ───────────────────────────────────────────────────
 
     def _place_live(self, txn_type: str, qty: int, price: float, *, tag: str) -> bool:
@@ -1050,9 +1200,22 @@ class TradingEngine:
 # ──────────────────────────────────────────────────────────────────────────
 
 def resume_active_sessions(app):
-    """Find ACTIVE TradingSessions and re-spawn engines for them."""
+    """Find ACTIVE TradingSessions and re-spawn engines for them.
+
+    Replay sessions aren't resumed — their virtual cursor isn't persisted, so a
+    restart can't continue them mid-replay; they're marked stopped instead."""
     with app.app_context():
         sessions = TradingSession.query.filter_by(status=SessionStatus.ACTIVE).all()
+        replay_stopped = 0
+        for s in sessions:
+            if s.mode == SessionMode.REPLAY:
+                s.status = SessionStatus.STOPPED
+                s.stopped_at = datetime.now(timezone.utc)
+                s.auto_stop_reason = 'replay_not_resumable'
+                replay_stopped += 1
+        if replay_stopped:
+            db.session.commit()
+        sessions = [s for s in sessions if s.mode != SessionMode.REPLAY]
     if not sessions:
         return 0
     from app.services.session_manager import session_manager

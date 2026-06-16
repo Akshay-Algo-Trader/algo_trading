@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import axiosInstance from '../../api/axiosInstance'
-import BacktestPanel, { BacktestControls } from '../../components/BacktestPanel'
+import BacktestPanel, { BacktestControls, defaultDateRange } from '../../components/BacktestPanel'
 import { PageHeader } from '../../components/admin/TableHelpers'
 
 function StrategyBacktestTab() {
@@ -10,7 +10,8 @@ function StrategyBacktestTab() {
 
   const [strategies, setStrategies] = useState([])
   const [selectedId, setSelectedId] = useState(initialId)
-  const [days,       setDays]       = useState(90)
+  const [startDate,  setStartDate]  = useState(defaultDateRange().startDate)
+  const [endDate,    setEndDate]    = useState(defaultDateRange().endDate)
   const [loading,    setLoading]    = useState(false)
   const [result,     setResult]     = useState(null)
   const [error,      setError]      = useState('')
@@ -31,7 +32,9 @@ function StrategyBacktestTab() {
     setLoading(true); setResult(null); setError('')
     try {
       const { data } = await axiosInstance.post('/api/admin/backtest', {
-        strategy_id: Number(selectedId), days,
+        strategy_id: Number(selectedId),
+        start_date: startDate,
+        end_date: endDate,
       })
       setResult(data)
     } catch (err) {
@@ -66,14 +69,22 @@ function StrategyBacktestTab() {
             ))}
           </select>
         </div>
-        <BacktestControls days={days} onChangeDays={setDays} onRun={handleRun} loading={loading} disabled={!selectedId} />
+        <BacktestControls
+          startDate={startDate}
+          endDate={endDate}
+          onChangeStart={setStartDate}
+          onChangeEnd={setEndDate}
+          onRun={handleRun}
+          loading={loading}
+          disabled={!selectedId}
+        />
       </div>
 
       <BacktestPanel
         result={result}
         loading={loading}
         error={error}
-        emptyHint="Pick a strategy, choose a duration, and click Run Backtest"
+        emptyHint="Pick a strategy, choose a date range, and click Run Backtest"
       />
     </div>
   )

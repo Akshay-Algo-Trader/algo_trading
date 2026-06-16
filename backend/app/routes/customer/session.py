@@ -9,11 +9,51 @@ from app.models import (
     SessionStatus, Strategy, ExecutionLog,
 )
 from app.routes.decorators import customer_required
+from app.services.kite_service import IST
 
 customer_session_bp = Blueprint('customer_session', __name__)
 logger = logging.getLogger(__name__)
 
 _IST_OFFSET_SEC = 19800  # +05:30 — chart timestamps fake IST wall-clock as UTC
+
+
+def _parse_replay_start(value):
+    """Parse a replay start time. Supports:
+    - UTC format with Z: '2026-06-15T03:45:00Z' (frontend sends UTC time)
+    - ISO format with timezone: '2026-06-15T09:15:00+05:30'
+    - Naive datetime-local: 'YYYY-MM-DDTHH:MM[:SS]' (treated as IST)
+
+    Returns a tz-aware IST datetime, or None if invalid."""
+    if not value:
+        return None
+
+    value_str = str(value)
+
+    # Try UTC format first (with Z suffix) - this is what the new frontend sends
+    if value_str.endswith('Z'):
+        try:
+            dt = datetime.strptime(value_str, '%Y-%m-%dT%H:%M:%SZ')
+            # Interpret as UTC and convert to IST
+            return dt.replace(tzinfo=timezone.utc).astimezone(IST)
+        except ValueError:
+            pass
+
+    # Try parsing ISO format with timezone (e.g., '2026-06-15T09:15:00+05:30')
+    for fmt in ('%Y-%m-%dT%H:%M:%S%z', '%Y-%m-%dT%H:%M%z'):
+        try:
+            dt = datetime.strptime(value_str, fmt)
+            # Convert to IST to ensure consistent timezone
+            return dt.astimezone(IST)
+        except ValueError:
+            continue
+
+    # Fall back to naive parsing (assume IST)
+    for fmt in ('%Y-%m-%dT%H:%M:%S', '%Y-%m-%dT%H:%M', '%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M'):
+        try:
+            return datetime.strptime(value_str, fmt).replace(tzinfo=IST)
+        except ValueError:
+            continue
+    return None
 
 
 @customer_session_bp.post('/api/customer/session/start')
@@ -30,9 +70,26 @@ def start_session():
     try:
         session_mode = SessionMode(mode)
     except ValueError:
-        return jsonify({'error': 'mode must be "live" or "paper"'}), 400
+        return jsonify({'error': 'mode must be "live", "paper" or "replay"'}), 400
 
-    Strategy.query.get_or_404(strategy_id)
+    strategy = Strategy.query.get_or_404(strategy_id)
+
+    # ── Replay mode validation — a paper-style simulation over historical candles ──
+    replay_start_at = None
+    if session_mode == SessionMode.REPLAY:
+        opt_cfg = strategy.option_config if isinstance(strategy.option_config, dict) else None
+        if opt_cfg and opt_cfg.get('enabled'):
+            return jsonify({'error': 'Replay does not support option strategies yet'}), 400
+
+        replay_start_at = _parse_replay_start(data.get('replay_start'))
+        if replay_start_at is None:
+            return jsonify({'error': 'replay_start (a past date & time) is required for replay'}), 400
+        if replay_start_at >= datetime.now(IST):
+            return jsonify({'error': 'replay_start must be in the past'}), 400
+
+        kite_cfg = KiteConfig.query.filter_by(user_id=user_id).first()
+        if not (kite_cfg and kite_cfg.is_connected and kite_cfg.access_token_encrypted):
+            return jsonify({'error': 'Connect your Kite account to replay historical data'}), 400
 
     active = TradingSession.query.filter_by(
         user_id=user_id, status=SessionStatus.ACTIVE
@@ -43,6 +100,7 @@ def start_session():
     session = TradingSession(
         user_id=user_id, strategy_id=strategy_id, mode=session_mode,
         phase='monitoring', pattern_detected=False,
+        replay_start_at=replay_start_at,
     )
     db.session.add(session)
     db.session.commit()
@@ -126,6 +184,7 @@ def session_state():
                 payload['entry_price'] = st['entry_price']
             if st.get('plan_state') is not None:
                 payload['plan_state'] = st['plan_state']
+            payload['replay'] = st.get('replay')
         except Exception:
             logger.exception("engine.get_status failed for session %d", session.id)
 
@@ -249,7 +308,9 @@ def session_chart():
     if not resolved_contract:
         ltp = engine_ltp if engine_ltp is not None else session.last_ltp
 
-    order_model = PaperOrder if session.mode == SessionMode.PAPER else LiveOrder
+    # Replay orders are recorded as PaperOrders (on a REPLAY session); only LIVE
+    # uses LiveOrder. Picking the wrong model here drops the trade markers.
+    order_model = LiveOrder if session.mode == SessionMode.LIVE else PaperOrder
     orders = (
         order_model.query
         .filter_by(session_id=session.id)

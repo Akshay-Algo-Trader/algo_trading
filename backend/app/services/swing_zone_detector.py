@@ -52,13 +52,15 @@ _MAX_FETCH_DAYS = {
 }
 
 
-def fetch_candles_for_swing_config(kite, swing_config, instrument, exchange, extra_days=0):
+def fetch_candles_for_swing_config(kite, swing_config, instrument, exchange, extra_days=0, end_date=None):
     """Fetch (and, for 4hour, aggregate) candles for a SwingZoneConfig's
     candle_size, covering `period_days` + buffer + `extra_days` of history
-    ending today.
+    ending at `end_date` (defaults to today).
 
     swing_config: dict with 'candle_size' and 'period_days' keys (e.g.
     SwingZoneConfig.to_dict()).
+    end_date: last calendar day to fetch through; lets the backtest report on a
+    window that ends in the past. Defaults to today when None.
     Returns a list of candle dicts {date, open, high, low, close, volume}.
     """
     from app.routes.customer.market import _resolve_token
@@ -74,7 +76,8 @@ def fetch_candles_for_swing_config(kite, swing_config, instrument, exchange, ext
     if total_days > max_days:
         total_days = max_days
 
-    end_date = datetime.now(_IST).date()
+    if end_date is None:
+        end_date = datetime.now(_IST).date()
     fetch_from = end_date - timedelta(days=total_days)
 
     token = _resolve_token(instrument, exchange, kite)

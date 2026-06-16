@@ -2,11 +2,26 @@ import { useState, Fragment } from 'react'
 import BacktestChart from './BacktestChart'
 
 export const BACKTEST_DURATIONS = [
-  { label: '1 Month',  days: 30  },
-  { label: '3 Months', days: 90  },
-  { label: '6 Months', days: 180 },
-  { label: '1 Year',   days: 365 },
+  { label: '1M',  days: 30  },
+  { label: '3M', days: 90  },
+  { label: '6M', days: 180 },
+  { label: '1Y',   days: 365 },
 ]
+
+// Local-date 'YYYY-MM-DD' (avoids the UTC shift toISOString would introduce).
+function isoDate(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+// Default backtest range: the last `days` calendar days ending today.
+export function defaultDateRange(days = 90) {
+  const end = new Date()
+  const start = new Date(end.getTime() - days * 86400000)
+  return { startDate: isoDate(start), endDate: isoDate(end) }
+}
 
 const EXIT_LABELS = {
   stop_loss:             { text: 'Stop Loss',       cls: 'bg-red-100 text-red-700'    },
@@ -325,19 +340,49 @@ export default function BacktestPanel({ result, error, loading, emptyHint = 'Sel
   )
 }
 
-// Reusable run-controls row (duration tabs + Run button).
-export function BacktestControls({ days, onChangeDays, onRun, loading, disabled }) {
+// Reusable run-controls row (date-range picker + quick presets + Run button).
+export function BacktestControls({ startDate, endDate, onChangeStart, onChangeEnd, onRun, loading, disabled }) {
+  const today = isoDate(new Date())
+  const invalidRange = !startDate || !endDate || startDate >= endDate
+
+  function applyPreset(days) {
+    const range = defaultDateRange(days)
+    onChangeStart(range.startDate)
+    onChangeEnd(range.endDate)
+  }
+
   return (
     <div className="flex flex-wrap items-end gap-4">
       <div>
-        <label className="block text-xs font-medium text-gray-600 mb-1">Duration</label>
+        <label className="block text-xs font-medium text-gray-600 mb-1">From</label>
+        <input
+          type="date"
+          value={startDate}
+          max={endDate || today}
+          onChange={e => onChangeStart(e.target.value)}
+          className="text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">To</label>
+        <input
+          type="date"
+          value={endDate}
+          min={startDate || undefined}
+          max={today}
+          onChange={e => onChangeEnd(e.target.value)}
+          className="text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+      <div>
+        <label className="block text-xs font-medium text-gray-600 mb-1">Quick range</label>
         <div className="flex gap-1.5">
           {BACKTEST_DURATIONS.map(d => (
             <button
               key={d.days}
               type="button"
-              onClick={() => onChangeDays(d.days)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${days === d.days ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+              onClick={() => applyPreset(d.days)}
+              className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
             >
               {d.label}
             </button>
@@ -347,7 +392,7 @@ export function BacktestControls({ days, onChangeDays, onRun, loading, disabled 
       <button
         type="button"
         onClick={onRun}
-        disabled={disabled || loading}
+        disabled={disabled || loading || invalidRange}
         className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors"
       >
         {loading ? (

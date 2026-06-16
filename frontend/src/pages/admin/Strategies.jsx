@@ -5,7 +5,7 @@ import {
   Card, Table, SkeletonTable, EmptyRow, ErrorRow, Badge,
   Modal, FormField, Input, Select, Btn, PageHeader,
 } from '../../components/admin/TableHelpers'
-import BacktestPanel, { BacktestControls } from '../../components/BacktestPanel'
+import BacktestPanel, { BacktestControls, defaultDateRange } from '../../components/BacktestPanel'
 
 function useSwingZones() {
   const [swingZones, setSwingZones] = useState([])
@@ -242,7 +242,8 @@ function StrategyModal({ isOpen, onClose, onSaved, strategy }) {
 
 // ─── Backtest modal ───────────────────────────────────────────────────────────
 function BacktestModal({ isOpen, onClose, strategy }) {
-  const [days,    setDays]    = useState(90)
+  const [startDate, setStartDate] = useState(defaultDateRange().startDate)
+  const [endDate,   setEndDate]   = useState(defaultDateRange().endDate)
   const [loading, setLoading] = useState(false)
   const [result,  setResult]  = useState(null)
   const [error,   setError]   = useState('')
@@ -252,7 +253,9 @@ function BacktestModal({ isOpen, onClose, strategy }) {
     if (isOpen) {
       setResult(null)
       setError('')
-      setDays(90)
+      const range = defaultDateRange()
+      setStartDate(range.startDate)
+      setEndDate(range.endDate)
     }
   }, [isOpen, strategy?.id])
 
@@ -264,7 +267,8 @@ function BacktestModal({ isOpen, onClose, strategy }) {
     try {
       const { data } = await axiosInstance.post('/api/admin/backtest', {
         strategy_id: strategy.id,
-        days,
+        start_date: startDate,
+        end_date: endDate,
       })
       setResult(data)
     } catch (err) {
@@ -289,9 +293,16 @@ function BacktestModal({ isOpen, onClose, strategy }) {
               </span>
             )}
           </div>
-          <BacktestControls days={days} onChangeDays={setDays} onRun={handleRun} loading={loading} />
+          <BacktestControls
+            startDate={startDate}
+            endDate={endDate}
+            onChangeStart={setStartDate}
+            onChangeEnd={setEndDate}
+            onRun={handleRun}
+            loading={loading}
+          />
         </div>
-        <BacktestPanel result={result} loading={loading} error={error} emptyHint="Pick a duration and click Run Backtest" />
+        <BacktestPanel result={result} loading={loading} error={error} emptyHint="Pick a date range and click Run Backtest" />
       </div>
     </Modal>
   )
