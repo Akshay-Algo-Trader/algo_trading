@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef } from 'react'
 import axiosInstance from '../api/axiosInstance'
 
-const POLL_MS = 3000  // Poll backend state every 3s — engine drives execution, browser just views
+const POLL_MS = 3000        // Poll backend state every 3s — engine drives execution, browser just views
+const REPLAY_POLL_MS = 1000 // Replay steps one candle/second, so poll faster to track it
 
 // Map server severity → log className key used by the panel
 const SEVERITY_MAP = { info: 'info', success: 'success', warn: 'warn', error: 'error' }
@@ -65,13 +66,14 @@ function planStateFromServer(serverPlanState) {
  * `session` and `strategy` are accepted for API compatibility with the old
  * hook but are mostly used as a "should we be polling?" trigger.
  */
-export function useStrategyExecutor({ session, strategy, mode: _mode, onSessionStop, onError }) {
+export function useStrategyExecutor({ session, strategy, mode, onSessionStop, onError }) {
   const [phase, setPhase]                     = useState('idle')
   const [ltp, setLtp]                         = useState(null)
   const [entryPrice, setEntryPrice]           = useState(null)
   const [logs, setLogs]                       = useState([])
   const [patternDetected, setPatternDetected] = useState(false)
   const [planState, setPlanState]             = useState(null)
+  const [replay, setReplay]                   = useState(null)
 
   const onStopRef    = useRef(onSessionStop)
   const onErrorRef   = useRef(onError)
@@ -90,12 +92,14 @@ export function useStrategyExecutor({ session, strategy, mode: _mode, onSessionS
       setLogs([])
       setPatternDetected(false)
       setPlanState(null)
+      setReplay(null)
       lastPhaseRef.current = null
       stopFiredRef.current = false
       return
     }
 
     let cancelled = false
+    let timerId = null
     stopFiredRef.current = false
 
     async function poll() {
@@ -116,6 +120,9 @@ export function useStrategyExecutor({ session, strategy, mode: _mode, onSessionS
         setEntryPrice(s.entry_price ?? null)
         setPatternDetected(Boolean(s.pattern_detected))
         setPlanState(planStateFromServer(s.plan_state))
+        // Sticky: once the engine self-completes it's pruned and stops emitting a
+        // replay block — keep the last one so the badge/progress survive for study.
+        if (s.replay) setReplay(s.replay)
         setLogs(logsToView(data.logs))
 
         // Detect phase transition exited / stopped → fire onSessionStop once
@@ -137,6 +144,8 @@ export function useStrategyExecutor({ session, strategy, mode: _mode, onSessionS
           } else {
             onStopRef.current?.({ reason: 'stopped' })
           }
+          // The session is terminal — stop polling a finished session.
+          if (timerId) { clearInterval(timerId); timerId = null }
         }
         lastPhaseRef.current = nextPhase
       } catch (err) {
@@ -148,9 +157,9 @@ export function useStrategyExecutor({ session, strategy, mode: _mode, onSessionS
     }
 
     poll()
-    const id = setInterval(poll, POLL_MS)
-    return () => { cancelled = true; clearInterval(id) }
-  }, [session?.id, strategy?.id])
+    timerId = setInterval(poll, mode === 'replay' ? REPLAY_POLL_MS : POLL_MS)
+    return () => { cancelled = true; if (timerId) clearInterval(timerId) }
+  }, [session?.id, strategy?.id, mode])
 
-  return { phase, ltp, entryPrice, logs, patternDetected, planState }
+  return { phase, ltp, entryPrice, logs, patternDetected, planState, replay }
 }

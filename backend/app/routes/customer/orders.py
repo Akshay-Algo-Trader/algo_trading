@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import get_jwt_identity
-from app.models import LiveOrder, PaperOrder
+from app.models import LiveOrder, PaperOrder, TradingSession
+from app.models.trading_session import SessionMode
 from app.routes.decorators import customer_required
 from collections import defaultdict
 
@@ -52,6 +53,15 @@ def my_orders():
         d.setdefault('pnl', None)
         return d
 
+    # Replay orders are PaperOrder rows on REPLAY-mode sessions — kept out of the
+    # Paper tab so the two stay isolated; surfaced only under mode='replay'.
+    replay_session_ids = [
+        sid for (sid,) in TradingSession.query
+        .with_entities(TradingSession.id)
+        .filter_by(user_id=user_id, mode=SessionMode.REPLAY)
+        .all()
+    ]
+
     result = {}
     if mode in ('', 'live'):
         live = LiveOrder.query.filter_by(user_id=user_id).order_by(
@@ -59,10 +69,18 @@ def my_orders():
         ).all()
         result['live'] = [with_meta(o) for o in live]
     if mode in ('', 'paper'):
-        paper = PaperOrder.query.filter_by(user_id=user_id).order_by(
-            PaperOrder.created_at.desc()
-        ).all()
-        rows = [with_meta(o) for o in paper]
-        result['paper'] = _compute_paper_pnl(rows)
+        q = PaperOrder.query.filter_by(user_id=user_id)
+        if replay_session_ids:
+            q = q.filter(PaperOrder.session_id.notin_(replay_session_ids))
+        paper = q.order_by(PaperOrder.created_at.desc()).all()
+        result['paper'] = _compute_paper_pnl([with_meta(o) for o in paper])
+    if mode == 'replay':
+        replay = (
+            PaperOrder.query.filter_by(user_id=user_id)
+            .filter(PaperOrder.session_id.in_(replay_session_ids))
+            .order_by(PaperOrder.created_at.desc())
+            .all()
+        ) if replay_session_ids else []
+        result['replay'] = _compute_paper_pnl([with_meta(o) for o in replay])
 
     return jsonify({'orders': result}), 200

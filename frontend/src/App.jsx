@@ -28,6 +28,7 @@ import CustomerLayout    from './layouts/CustomerLayout'
 import CustomerDashboard  from './pages/customer/Dashboard'
 import CustomerMarket     from './pages/customer/Market'
 import CustomerStrategies from './pages/customer/Strategies'
+import CustomerReplay     from './pages/customer/Replay'
 import CustomerPortfolio  from './pages/customer/Portfolio'
 import CustomerHistory    from './pages/customer/History'
 import CustomerBacktest   from './pages/customer/Backtest'
@@ -104,6 +105,7 @@ export default function App() {
           <Route path="/dashboard"  element={<CustomerDashboard />} />
           <Route path="/market"     element={<CustomerMarket />} />
           <Route path="/strategies" element={<CustomerStrategies />} />
+          <Route path="/replay"     element={<CustomerReplay />} />
           <Route path="/portfolio"  element={<CustomerPortfolio />} />
           <Route path="/history"    element={<CustomerHistory />} />
           <Route path="/backtest"   element={<CustomerBacktest />} />

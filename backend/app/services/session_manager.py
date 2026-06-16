@@ -37,11 +37,11 @@ class _SessionManager:
         """
         Spawn the engine for an already-persisted TradingSession row.
 
-        Mode must be 'paper' or 'live'.
+        Mode must be 'paper', 'live' or 'replay'.
         """
         if self._app is None:
             raise RuntimeError("SessionManager.init_app() has not been called")
-        if mode not in ("paper", "live"):
+        if mode not in ("paper", "live", "replay"):
             raise ValueError(f"Unknown trading mode: '{mode}'")
 
         with self._lock:
